@@ -62,6 +62,7 @@ export async function POST(request: NextRequest) {
     prompt?: string;
     location?: { name?: string; lat?: number; lng?: number };
     days?: number;
+    startDate?: string;
     pace?: string;
     budget?: string;
     companions?: string;
@@ -110,6 +111,7 @@ export async function POST(request: NextRequest) {
         "根据节奏限制每日站数。慢游强调停留质量，亲子与疲劳需求要减少连续步行，节省预算优先免费或公共空间。",
         "opening 字段可能是开放数据摘要而不是实时信息。不要保证开放、票价或预约；需要核对时在 note 里明确提醒。",
         "修改模式必须直接执行用户的修改意图，同时尽量保留当前行程中未受影响的合理安排。",
+        "生成模式如果提供 tripStartDate，应让每天标题与该日期开始的连续日期相符。",
         "时间必须使用 24 小时 HH:MM，endTime 必须晚于 time。note 用一句可执行中文说明安排理由，不超过 45 字。",
         "summary 用一句中文说明这次计划或修改解决了什么，不要声称已验证实时信息。",
       ].join("\n"),
@@ -118,6 +120,7 @@ export async function POST(request: NextRequest) {
         userRequest: safeText(body.prompt, mode === "modify" ? "优化当前行程" : "生成专属行程", 500),
         travelCenter: body.location ?? {},
         requestedDays,
+        tripStartDate: /^\d{4}-\d{2}-\d{2}$/.test(body.startDate ?? "") ? body.startDate : null,
         preferences: {
           pace: safeText(body.pace, "松弛", 20),
           budget: safeText(body.budget, "适中", 20),

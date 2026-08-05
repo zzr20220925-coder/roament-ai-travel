@@ -60,7 +60,11 @@ type AIPlanResponse = {
 
 type DiningIntent = { cuisine: string; cuisineLabel: string; minRating: number; budget: number; currency: Currency; time: string };
 type AgentAction = {
-  action: "place_search" | "dining_search" | "weather_replan" | "delay_replan" | "fatigue_replan" | "budget_replan" | "open_planner" | "general";
+  action: "destination_plan" | "place_search" | "dining_search" | "weather_replan" | "delay_replan" | "fatigue_replan" | "budget_replan" | "open_planner" | "general";
+  destinationQuery: string | null;
+  destinationLabel: string | null;
+  tripDays: number | null;
+  startDate: string | null;
   placeQuery: string | null;
   placeLabel: string | null;
   cuisineQuery: string | null;
@@ -162,9 +166,16 @@ function buildTimeline(places: Place[]): TripStop[] {
   }));
 }
 
-function resolvePlanDays(data: AIPlanResponse, candidates: Place[]): TripDay[] {
+function tripDateLabel(startDate: string | null | undefined, offset: number) {
+  const match = startDate?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + offset));
+  return `${date.getUTCMonth() + 1}月${date.getUTCDate()}日`;
+}
+
+function resolvePlanDays(data: AIPlanResponse, candidates: Place[], startDate?: string | null): TripDay[] {
   const placeById = new Map(candidates.map((place) => [place.id, place]));
-  return (data.days ?? []).map((day) => {
+  return (data.days ?? []).map((day, dayIndex) => {
     const stops = day.stops.flatMap((stop, index) => {
       const place = placeById.get(stop.placeId);
       if (!place) return [];
@@ -178,8 +189,45 @@ function resolvePlanDays(data: AIPlanResponse, candidates: Place[]): TripDay[] {
         note: stop.note,
       }];
     });
-    return { day: day.day, title: day.title, stops };
+    const date = tripDateLabel(startDate, dayIndex);
+    return { day: day.day, title: date ? `${date} · ${day.title}` : day.title, stops };
   }).filter((day) => day.stops.length > 0);
+}
+
+function parseSmallChineseNumber(value: string) {
+  if (/^\d+$/.test(value)) return Number(value);
+  const digits: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  if (value === "十") return 10;
+  if (value.includes("十")) {
+    const [tens, ones] = value.split("十");
+    return (tens ? digits[tens] ?? 0 : 1) * 10 + (ones ? digits[ones] ?? 0 : 0);
+  }
+  return digits[value] ?? Number.NaN;
+}
+
+function parseLocalDestinationIntent(text: string) {
+  const destinationMatch = text.match(/(?:想去|要去|去|到)\s*([\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z·.' -]{0,29}?)(?=[一二两三四五六七八九十\d]+\s*天|旅行|旅游|玩|[，,。.!！?？]|\s+(?:从|在|于)?[一二两三四五六七八九十\d]+月|$)/u);
+  const daysMatch = text.match(/([一二两三四五六七八九十\d]+)\s*天/);
+  if (!destinationMatch || (!daysMatch && !/旅行|旅游|行程|月\d*日|月\d*号/.test(text))) return null;
+  const parsedDays = daysMatch ? parseSmallChineseNumber(daysMatch[1]) : 3;
+  const dateMatch = text.match(/(?:从|在|于)?([一二两三四五六七八九十\d]+)月([一二两三四五六七八九十\d]+)[日号]/);
+  let startDate: string | null = null;
+  if (dateMatch) {
+    const month = parseSmallChineseNumber(dateMatch[1]);
+    const day = parseSmallChineseNumber(dateMatch[2]);
+    const now = new Date();
+    let year = now.getFullYear();
+    const candidate = new Date(year, month - 1, day);
+    const today = new Date(year, now.getMonth(), now.getDate());
+    if (candidate < today) year += 1;
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) startDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+  return {
+    destinationQuery: destinationMatch[1].trim(),
+    destinationLabel: destinationMatch[1].trim(),
+    days: Math.min(14, Math.max(1, Number.isFinite(parsedDays) ? parsedDays : 3)),
+    startDate,
+  };
 }
 
 function shiftTime(time: string, minutes: number) {
@@ -504,7 +552,76 @@ export default function Home() {
       .trim() || text.trim();
   }
 
+  async function planDestinationTrip(prompt: string, destinationQuery: string, destinationLabel: string, requestedDays: number, requestedStartDate?: string | null) {
+    if (planLoading) return;
+    const dayCount = Math.min(14, Math.max(1, Math.round(requestedDays || 3)));
+    const startDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedStartDate ?? "") ? requestedStartDate : null;
+    setPlanLoading(true);
+    setPlanError("");
+    setUpdateNote(`正在加载 ${destinationLabel} 的真实地点，并生成 ${dayCount} 天计划…`);
+    try {
+      const exploreResponse = await fetch("/api/explore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: destinationQuery }),
+      });
+      const explored = await exploreResponse.json() as ExploreResult & { error?: string };
+      if (!exploreResponse.ok || !explored.location) throw new Error(explored.error ?? `没有找到 ${destinationLabel}`);
+      if (explored.places.length < 2) throw new Error(`${destinationLabel} 的开放地图候选地点暂时不足`);
+
+      setUpdateNote(`已找到 ${explored.places.length} 个 ${destinationLabel} 真实地点，OpenAI 正在编排 ${dayCount} 天路线…`);
+      const planResponse = await fetch("/api/itinerary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "generate",
+          prompt,
+          location: explored.location,
+          days: dayCount,
+          startDate,
+          pace,
+          budget,
+          companions,
+          interests,
+          candidates: explored.places,
+        }),
+      });
+      const plan = await planResponse.json() as AIPlanResponse;
+      if (!planResponse.ok) throw new Error(plan.error ?? "AI 暂时无法生成目的地行程");
+      const plannedDays = resolvePlanDays(plan, explored.places, startDate);
+      if (plannedDays.length !== dayCount || !plannedDays[0]?.stops.length) throw new Error("AI 没有返回完整的多日计划");
+
+      setLocation(explored.location);
+      setQuery(destinationQuery);
+      setPlaces(explored.places);
+      setDays(dayCount);
+      setTripDays(plannedDays);
+      setActiveDay(1);
+      setTimeline(plannedDays[0].stops);
+      setSelectedId(plannedDays[0].stops[0].place.id);
+      setTripPlanner(false);
+      setHotelEditor(false);
+      setActiveScenario(null);
+      setJourneyStarted(false);
+      setAiState("live");
+      const dateCopy = startDate ? `，从 ${tripDateLabel(startDate, 0)} 开始` : "";
+      setUpdateNote(plan.summary ?? `已生成 ${destinationLabel} ${dayCount} 天计划${dateCopy}。`);
+    } catch (error) {
+      setAiState("error");
+      const message = error instanceof Error ? error.message : "目的地计划生成失败，请稍后重试";
+      setPlanError(message);
+      setUpdateNote(message);
+    } finally {
+      setPlanLoading(false);
+    }
+  }
+
   async function runLocalCommand(text: string) {
+    const destinationIntent = parseLocalDestinationIntent(text);
+    if (destinationIntent) {
+      await planDestinationTrip(text, destinationIntent.destinationQuery, destinationIntent.destinationLabel, destinationIntent.days, destinationIntent.startDate);
+      return;
+    }
     if (/吃|餐厅|晚餐|料理|法餐|法国|restaurant|dinner/i.test(text)) {
       await searchDining(text);
       return;
@@ -578,7 +695,15 @@ export default function Home() {
       }
       setAiState("live");
       const action = data.action;
-      if (action.action === "dining_search") {
+      if (action.action === "destination_plan") {
+        await planDestinationTrip(
+          text,
+          action.destinationQuery ?? action.destinationLabel ?? localPlaceQuery(text),
+          action.destinationLabel ?? action.destinationQuery ?? "目的地",
+          action.tripDays ?? 3,
+          action.startDate,
+        );
+      } else if (action.action === "dining_search") {
         const intent: DiningIntent = {
           cuisine: action.cuisineQuery ?? "Local restaurant",
           cuisineLabel: action.cuisineLabel ?? "当地餐厅",
@@ -732,7 +857,7 @@ export default function Home() {
             {(Object.keys(scenarioCopy) as Scenario[]).map((scenario) => <button key={scenario} className={activeScenario === scenario ? "active" : ""} onClick={() => replanTrip(scenarioCopy[scenario].prompt, scenario)} disabled={replanning || aiThinking}><Icon name={scenarioCopy[scenario].icon} size={16}/>{scenarioCopy[scenario].label}</button>)}
             <span className={`engine-status ${aiState}`}><i/>{aiState === "live" ? "OPENAI + OPEN MAP" : "OPEN MAP"}</span>
           </div>
-          <form onSubmit={submitCommand}><span><Icon name="spark" size={19}/></span><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="例如：我想去凯旋门，或者附近找一家法国餐厅" aria-label="输入行程变化"/><button type="submit" aria-label="发送给 Michi" disabled={aiThinking}><Icon name="send" size={18}/></button></form>
+          <form onSubmit={submitCommand}><span><Icon name="spark" size={19}/></span><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="例如：9月1日开始去纽约5天，或者我想去凯旋门" aria-label="输入行程变化"/><button type="submit" aria-label="发送给 Michi" disabled={aiThinking || planLoading}><Icon name="send" size={18}/></button></form>
         </section>
       </section>
 
