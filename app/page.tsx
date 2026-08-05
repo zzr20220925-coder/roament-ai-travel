@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent, SymbolLayerSpecification } from "maplibre-gl";
+import { parseDestinationIntent } from "@/lib/trip-intent";
 
 type Category = "attraction" | "restaurant" | "shopping";
 type StopStatus = "done" | "now" | "next" | "optional";
@@ -192,42 +193,6 @@ function resolvePlanDays(data: AIPlanResponse, candidates: Place[], startDate?: 
     const date = tripDateLabel(startDate, dayIndex);
     return { day: day.day, title: date ? `${date} · ${day.title}` : day.title, stops };
   }).filter((day) => day.stops.length > 0);
-}
-
-function parseSmallChineseNumber(value: string) {
-  if (/^\d+$/.test(value)) return Number(value);
-  const digits: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
-  if (value === "十") return 10;
-  if (value.includes("十")) {
-    const [tens, ones] = value.split("十");
-    return (tens ? digits[tens] ?? 0 : 1) * 10 + (ones ? digits[ones] ?? 0 : 0);
-  }
-  return digits[value] ?? Number.NaN;
-}
-
-function parseLocalDestinationIntent(text: string) {
-  const destinationMatch = text.match(/(?:想去|要去|去|到)\s*([\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z·.' -]{0,29}?)(?=[一二两三四五六七八九十\d]+\s*天|旅行|旅游|玩|[，,。.!！?？]|\s+(?:从|在|于)?[一二两三四五六七八九十\d]+月|$)/u);
-  const daysMatch = text.match(/([一二两三四五六七八九十\d]+)\s*天/);
-  if (!destinationMatch || (!daysMatch && !/旅行|旅游|行程|月\d*日|月\d*号/.test(text))) return null;
-  const parsedDays = daysMatch ? parseSmallChineseNumber(daysMatch[1]) : 3;
-  const dateMatch = text.match(/(?:从|在|于)?([一二两三四五六七八九十\d]+)月([一二两三四五六七八九十\d]+)[日号]/);
-  let startDate: string | null = null;
-  if (dateMatch) {
-    const month = parseSmallChineseNumber(dateMatch[1]);
-    const day = parseSmallChineseNumber(dateMatch[2]);
-    const now = new Date();
-    let year = now.getFullYear();
-    const candidate = new Date(year, month - 1, day);
-    const today = new Date(year, now.getMonth(), now.getDate());
-    if (candidate < today) year += 1;
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) startDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-  }
-  return {
-    destinationQuery: destinationMatch[1].trim(),
-    destinationLabel: destinationMatch[1].trim(),
-    days: Math.min(14, Math.max(1, Number.isFinite(parsedDays) ? parsedDays : 3)),
-    startDate,
-  };
 }
 
 function shiftTime(time: string, minutes: number) {
@@ -617,7 +582,7 @@ export default function Home() {
   }
 
   async function runLocalCommand(text: string) {
-    const destinationIntent = parseLocalDestinationIntent(text);
+    const destinationIntent = parseDestinationIntent(text);
     if (destinationIntent) {
       await planDestinationTrip(text, destinationIntent.destinationQuery, destinationIntent.destinationLabel, destinationIntent.days, destinationIntent.startDate);
       return;
@@ -684,6 +649,27 @@ export default function Home() {
     if (!text || aiThinking) return;
     setCommand("");
     setAiThinking(true);
+
+    // Multi-day destination requests are deterministic enough to route locally.
+    // Handle them before the model so an occasional `place_search` classification
+    // cannot turn "纽约五天" into a single-place lookup.
+    const destinationIntent = parseDestinationIntent(text);
+    if (destinationIntent) {
+      setUpdateNote(`正在查找 ${destinationIntent.destinationLabel} 的真实地点，并生成 ${destinationIntent.days} 天行程…`);
+      try {
+        await planDestinationTrip(
+          text,
+          destinationIntent.destinationQuery,
+          destinationIntent.destinationLabel,
+          destinationIntent.days,
+          destinationIntent.startDate,
+        );
+      } finally {
+        setAiThinking(false);
+      }
+      return;
+    }
+
     setUpdateNote("OpenAI 正在理解你的真实意图，并准备调用合适的旅行工具…");
     try {
       const response = await fetch("/api/agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text, location, timeline: timeline.map((stop) => ({ time: stop.time, name: stop.place.name, status: stop.status })) }) });
