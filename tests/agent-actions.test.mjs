@@ -10,6 +10,7 @@ function action(overrides) {
     startDate: null,
     placeQuery: null,
     placeLabel: null,
+    placeType: null,
     cuisineQuery: null,
     cuisineLabel: null,
     minRating: null,
@@ -75,8 +76,15 @@ test("agent returns every intent as a strict action array", async () => {
     assert.equal(requestBody.text.format.schema.properties.actions.minItems, 1);
     assert.equal(requestBody.text.format.schema.properties.actions.maxItems, 6);
     assert.equal(requestBody.text.format.schema.properties.actions.items.additionalProperties, false);
+    assert.ok(requestBody.text.format.schema.properties.actions.items.properties.action.enum.includes("nearby_search"));
+    assert.ok(requestBody.text.format.schema.properties.actions.items.properties.placeType.enum.includes("pharmacy"));
+    assert.ok(requestBody.text.format.schema.properties.actions.items.properties.placeType.enum.includes("craft"));
     assert.match(requestBody.instructions, /所有独立意图/);
     assert.match(requestBody.instructions, /shopping_search 和 dining_search/);
+    assert.match(requestBody.instructions, /附近生活地点或小型商铺/);
+    assert.match(requestBody.instructions, /附近有药店吗/);
+    assert.match(requestBody.instructions, /巴黎手工艺品商店/);
+    assert.match(requestBody.instructions, /明确说了城市/);
   } finally {
     global.fetch = originalFetch;
     if (originalKey === undefined) delete process.env.OPENAI_API_KEY;

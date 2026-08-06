@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { nearbyPlaceTypes, type NearbyPlaceType } from "@/lib/place-intent";
 
 export const maxDuration = 60;
 
 type AgentAction = {
-  action: "destination_plan" | "place_search" | "shopping_search" | "dining_search" | "weather_replan" | "delay_replan" | "fatigue_replan" | "budget_replan" | "open_planner" | "general";
+  action: "destination_plan" | "place_search" | "shopping_search" | "nearby_search" | "dining_search" | "weather_replan" | "delay_replan" | "fatigue_replan" | "budget_replan" | "open_planner" | "general";
   destinationQuery: string | null;
   destinationLabel: string | null;
   tripDays: number | null;
   startDate: string | null;
   placeQuery: string | null;
   placeLabel: string | null;
+  placeType: NearbyPlaceType | null;
   cuisineQuery: string | null;
   cuisineLabel: string | null;
   minRating: number | null;
@@ -75,6 +77,11 @@ export async function POST(request: NextRequest) {
         "如果用户想去、参观、加入或安排一个具体地点或景点，选择 place_search。placeQuery 填适合 OpenStreetMap 搜索的简短地点名，必要时加上 travelCenter 所在城市；placeLabel 填用户熟悉的简体中文名称。",
         "例如用户说‘我想去凯旋门’，应返回 place_search，placeQuery 可为 Arc de Triomphe, Paris，placeLabel 为凯旋门。",
         "如果用户想购物、去商场、百货公司或具体商店，选择 shopping_search，并把商场或商店名称放进 placeQuery 和 placeLabel。",
+        "如果用户寻找的是一类附近生活地点或小型商铺，而不是某个专名地点，选择 nearby_search；不要把药店、诊所或公共厕所误判成景点。",
+        "nearby_search 支持药店 pharmacy、手工艺品店 craft、书店 bookstore、市场 market、超市 grocery、便利店 convenience、诊所 clinic、医院 hospital、ATM atm、洗衣店 laundry、理发美容 beauty、花店 florist、面包店 bakery、纪念品店 souvenir、古董店 antiques、公共厕所 toilets、加油站 fuel、邮局 post_office、警察局 police、货币兑换 exchange、行李寄存 luggage。",
+        "例如‘附近有药店吗’必须返回 nearby_search，placeType 为 pharmacy，placeQuery 为 pharmacy；‘找巴黎手工艺品商店’必须返回 nearby_search，placeType 为 craft，placeQuery 为 handicraft shop, Paris。",
+        "nearby_search 中如果用户明确说了城市，还要把英文城市与国家写入 destinationQuery、中文城市写入 destinationLabel；未说城市时这两个字段保持 null，系统会以酒店或当前旅行中心搜索。",
+        "具体名称的店铺仍使用 shopping_search；泛指一类商铺使用 nearby_search。placeLabel 保留用户熟悉的中文类型名称。",
         "如果用户想吃饭、找餐厅或描述了菜系，选择 dining_search，并提取菜系与用餐时间。",
         "cuisineQuery 使用适合开放地点搜索的简短英文，例如 French restaurant；cuisineLabel 使用简体中文。",
         "开放地图不提供统一的商家评分和人均价格；即使用户提到这些偏好，也不要声称开放数据已验证。",
@@ -103,13 +110,14 @@ export async function POST(request: NextRequest) {
                 items: {
                   type: "object",
                   properties: {
-                    action: { type: "string", enum: ["destination_plan", "place_search", "shopping_search", "dining_search", "weather_replan", "delay_replan", "fatigue_replan", "budget_replan", "open_planner", "general"] },
+                    action: { type: "string", enum: ["destination_plan", "place_search", "shopping_search", "nearby_search", "dining_search", "weather_replan", "delay_replan", "fatigue_replan", "budget_replan", "open_planner", "general"] },
                     destinationQuery: { type: ["string", "null"] },
                     destinationLabel: { type: ["string", "null"] },
                     tripDays: { type: ["integer", "null"], minimum: 1, maximum: 14 },
                     startDate: { type: ["string", "null"] },
                     placeQuery: { type: ["string", "null"] },
                     placeLabel: { type: ["string", "null"] },
+                    placeType: { type: ["string", "null"], enum: [...nearbyPlaceTypes, null] },
                     cuisineQuery: { type: ["string", "null"] },
                     cuisineLabel: { type: ["string", "null"] },
                     minRating: { type: ["number", "null"], minimum: 1, maximum: 5 },
@@ -118,7 +126,7 @@ export async function POST(request: NextRequest) {
                     time: { type: ["string", "null"] },
                     explanation: { type: "string" },
                   },
-                  required: ["action", "destinationQuery", "destinationLabel", "tripDays", "startDate", "placeQuery", "placeLabel", "cuisineQuery", "cuisineLabel", "minRating", "budgetAmount", "budgetCurrency", "time", "explanation"],
+                  required: ["action", "destinationQuery", "destinationLabel", "tripDays", "startDate", "placeQuery", "placeLabel", "placeType", "cuisineQuery", "cuisineLabel", "minRating", "budgetAmount", "budgetCurrency", "time", "explanation"],
                   additionalProperties: false,
                 },
               },

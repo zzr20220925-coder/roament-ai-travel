@@ -26,6 +26,7 @@ test("server-renders the completed travel agent", async () => {
   assert.match(html, /class="journey-column"/);
   assert.match(html, /class="journey-scroll"/);
   assert.match(html, /aria-label="今日行程地图"/);
+  assert.match(html, /aria-label="切换为 3D 地图"/);
   assert.match(html, /旅行中心/);
   assert.match(html, /今天想去哪里？/);
   assert.match(html, /全部行程/);
@@ -39,7 +40,7 @@ test("server-renders the completed travel agent", async () => {
 });
 
 test("uses OpenAI with verified open-map candidates and keeps responsive behavior", async () => {
-  const [page, css, envExample, configRoute, diningRoute, placeSearchRoute, agentRoute, routesRoute, itineraryRoute, weatherRoute, weatherUtil] = await Promise.all([
+  const [page, css, envExample, configRoute, diningRoute, placeSearchRoute, agentRoute, routesRoute, itineraryRoute, weatherRoute, weatherUtil, placeIntent] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
@@ -51,12 +52,18 @@ test("uses OpenAI with verified open-map candidates and keeps responsive behavio
     readFile(new URL("../app/api/itinerary/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/weather/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/weather.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/place-intent.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /tiles\.openfreemap\.org\/styles\/liberty/);
   assert.match(page, /openstreetmap\.org\/directions/);
   assert.match(page, /OPENSTREETMAP/);
   assert.match(page, /await import\("maplibre-gl"\)/);
+  assert.doesNotMatch(page, /pitch: isMobile/);
+  assert.match(page, /pitch: 0/);
+  assert.match(page, /Math\.max\(map\.getZoom\(\), 15\.6\)/);
+  assert.match(page, /"fill-extrusion-height"/);
+  assert.match(page, /setMap3D\(\(current\) => !current\)/);
   assert.doesNotMatch(page, /google\.com\/maps|GOOGLE ROUTE|GOOGLE PLACES/i);
 
   assert.match(configRoute, /apiKeyRequired:\s*false/);
@@ -64,8 +71,12 @@ test("uses OpenAI with verified open-map candidates and keeps responsive behavio
   assert.match(diningRoute, /nominatim\.openstreetmap\.org/);
   assert.match(placeSearchRoute, /nominatim\.openstreetmap\.org/);
   assert.match(placeSearchRoute, /provider:\s*"openstreetmap"/);
+  assert.match(placeSearchRoute, /overpass-api\.de\/api\/interpreter/);
+  assert.match(placeSearchRoute, /searchNearbyType/);
+  assert.match(placeSearchRoute, /geocodeSearchCenter/);
   assert.match(agentRoute, /place_search/);
   assert.match(agentRoute, /shopping_search/);
+  assert.match(agentRoute, /nearby_search/);
   assert.match(agentRoute, /destination_plan/);
   assert.match(agentRoute, /actions:\s*plan\.actions\.slice\(0, 6\)|const actions = plan\.actions\.slice\(0, 6\)/);
   assert.match(agentRoute, /maxItems:\s*6/);
@@ -87,6 +98,12 @@ test("uses OpenAI with verified open-map candidates and keeps responsive behavio
   assert.match(page, /executeAgentActions/);
   assert.match(page, /for \(const \[index, action\] of actions\.entries\(\)\)/);
   assert.match(page, /action\.action === "shopping_search"/);
+  assert.match(page, /action\.action === "nearby_search"/);
+  assert.match(page, /detectNearbyPlaceType/);
+  assert.match(page, /searchLocationQuery/);
+  assert.match(placeIntent, /pharmacy/);
+  assert.match(placeIntent, /craft/);
+  assert.match(placeIntent, /luggage/);
   assert.match(page, /OpenAI 正在按你的节奏、预算和兴趣编排多日路线/);
   assert.doesNotMatch(envExample, /GOOGLE_MAPS|GOOGLE_SEARCH/i);
 
@@ -101,6 +118,8 @@ test("uses OpenAI with verified open-map candidates and keeps responsive behavio
   assert.match(css, /\.focus-pane\{order:1;[^}]*overflow:hidden/);
   assert.match(css, /\.map-host,\.map-host\.maplibregl-map,[^}]*max-width:100%/);
   assert.match(css, /max-width:100dvw;overflow-x:hidden/);
+  assert.match(css, /\.map-top \.map-dimension\.active/);
+  assert.match(css, /\.route-map\{order:2;[^}]*min-height:390px/);
   assert.doesNotMatch(css, /@media\(max-width:900px\)\{body\{overflow:auto\}/);
   assert.match(css, /\.day-line\{[^}]*background:transparent/);
   assert.doesNotMatch(css, /grid-template-areas:"focus map" "timeline map"/);

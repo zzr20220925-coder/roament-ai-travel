@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent, SymbolLayerSpecification } from "maplibre-gl";
+import { detectNearbyPlaceType, nearbyPlaceDefinitions, type NearbyPlaceType } from "@/lib/place-intent";
 import { parseDestinationIntents } from "@/lib/trip-intent";
 import type { WeatherData } from "@/lib/weather";
 
@@ -72,13 +73,14 @@ type AIPlanResponse = {
 
 type DiningIntent = { cuisine: string; cuisineLabel: string; minRating: number; budget: number; currency: Currency; time: string };
 type AgentAction = {
-  action: "destination_plan" | "place_search" | "shopping_search" | "dining_search" | "weather_replan" | "delay_replan" | "fatigue_replan" | "budget_replan" | "open_planner" | "general";
+  action: "destination_plan" | "place_search" | "shopping_search" | "nearby_search" | "dining_search" | "weather_replan" | "delay_replan" | "fatigue_replan" | "budget_replan" | "open_planner" | "general";
   destinationQuery: string | null;
   destinationLabel: string | null;
   tripDays: number | null;
   startDate: string | null;
   placeQuery: string | null;
   placeLabel: string | null;
+  placeType: NearbyPlaceType | null;
   cuisineQuery: string | null;
   cuisineLabel: string | null;
   minRating: number | null;
@@ -221,6 +223,7 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState("");
   const [searching, setSearching] = useState(false);
   const [mapReady, setMapReady] = useState(false);
+  const [map3D, setMap3D] = useState(false);
   const [hotelEditor, setHotelEditor] = useState(false);
   const [tripPlanner, setTripPlanner] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
@@ -286,7 +289,7 @@ export default function Home() {
         const labelLayer = layers.find((layer): layer is SymbolLayerSpecification => layer.type === "symbol" && Boolean(layer.layout?.["text-field"]));
         const labelFont = labelLayer?.layout?.["text-font"] ?? ["Noto Sans Regular"];
         try {
-          map.addLayer({ id: "michi-buildings", source: "openmaptiles", "source-layer": "building", type: "fill-extrusion", minzoom: 14, paint: { "fill-extrusion-color": ["interpolate", ["linear"], ["coalesce", ["get", "render_height"], 6], 0, "#e8e1d2", 40, "#c6c0ab", 120, "#8d9a8f"], "fill-extrusion-height": ["coalesce", ["get", "render_height"], 6], "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0], "fill-extrusion-opacity": .82 } }, labelLayer?.id);
+          map.addLayer({ id: "michi-buildings", source: "openmaptiles", "source-layer": "building", type: "fill-extrusion", minzoom: 14, paint: { "fill-extrusion-color": ["interpolate", ["linear"], ["coalesce", ["get", "render_height"], 6], 0, "#e8e1d2", 40, "#c6c0ab", 120, "#8d9a8f"], "fill-extrusion-height": ["coalesce", ["get", "render_height"], ["*", ["coalesce", ["get", "levels"], 2], 3]], "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0], "fill-extrusion-opacity": .84 } }, labelLayer?.id);
         } catch { /* Base style may not expose building heights. */ }
         map.addSource("michi-route", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addSource("michi-stops", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
@@ -328,11 +331,16 @@ export default function Home() {
       (map.getSource("michi-stops") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: timeline.map((stop, index) => ({ type: "Feature", properties: { id: stop.place.id, name: stop.place.name, order: String(index + 1).padStart(2, "0"), status: stop.status }, geometry: { type: "Point", coordinates: [stop.place.lng, stop.place.lat] } })) });
       (map.getSource("michi-hotel") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: routeStops.length ? [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [location.lng, location.lat] } }] : [] });
       if (!routeStops.length) return;
-      const bounds = new maplibregl.LngLatBounds(coordinates[0], coordinates[0]);
-      coordinates.forEach((point) => bounds.extend(point));
-      map.fitBounds(bounds, { padding: { top: 110, right: 70, bottom: 110, left: 70 }, maxZoom: 14.8, pitch: 52, bearing: -16, duration: 950 });
+      if (map3D) {
+        const focus = selected ?? currentStop?.place ?? routeStops[0];
+        map.easeTo({ center: [focus.lng, focus.lat], zoom: Math.max(map.getZoom(), 15.6), pitch: 58, bearing: -20, duration: 850 });
+      } else {
+        const bounds = new maplibregl.LngLatBounds(coordinates[0], coordinates[0]);
+        coordinates.forEach((point) => bounds.extend(point));
+        map.fitBounds(bounds, { padding: { top: 110, right: 70, bottom: 110, left: 70 }, maxZoom: 14.8, pitch: 0, bearing: 0, duration: 850 });
+      }
     } catch { /* The next style-ready update will retry. */ }
-  }, [location, mapReady, openRoute, routeStops, timeline]);
+  }, [currentStop?.place, location, map3D, mapReady, openRoute, routeStops, selected, timeline]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -511,12 +519,12 @@ export default function Home() {
     return place;
   }
 
-  async function searchAndAddPlace(query: string, label?: string | null, requestedTime?: string | null, category: "attraction" | "shopping" = "attraction") {
+  async function searchAndAddPlace(query: string, label?: string | null, requestedTime?: string | null, category: "attraction" | "shopping" | "local" = "attraction", placeType?: NearbyPlaceType | null, searchLocationQuery?: string | null) {
     setUpdateNote(`正在 OpenStreetMap 搜索“${label ?? query}”…`);
     const response = await fetch("/api/place-search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, label, location, category }),
+      body: JSON.stringify({ query, label, location, category, placeType, searchLocationQuery }),
     });
     const data = await response.json() as { places?: Place[]; error?: string };
     if (!response.ok) throw new Error(data.error ?? "暂时没有找到这个地点");
@@ -683,8 +691,19 @@ export default function Home() {
       if (destinationIntents.length > 1) setTripLibraryOpen(true);
       return;
     }
-    const diningRequested = /吃|餐厅|晚餐|料理|法餐|法国|restaurant|dinner/i.test(text);
+    const diningRequested = /吃|餐厅|晚餐|料理|法餐|法国(?:菜|大餐)|restaurant|dinner/i.test(text);
     const shoppingRequested = /购物|商场|百货|逛街|shopping|mall|department store/i.test(text);
+    const nearbyPlaceType = detectNearbyPlaceType(text);
+    const nearbyDefinition = nearbyPlaceType ? nearbyPlaceDefinitions[nearbyPlaceType] : null;
+    if (diningRequested && nearbyPlaceType && nearbyDefinition) {
+      const nearbyPlace = await searchAndAddPlace(nearbyDefinition.searchTerm, nearbyDefinition.label, "17:30", "local", nearbyPlaceType);
+      const dining = await searchDining(text, undefined, false);
+      const restaurant = dining.places[0];
+      if (!restaurant) throw new Error("附近没有找到符合菜系的餐厅");
+      addDiningToTrip(restaurant, dining.intent);
+      setUpdateNote(`已同时安排 ${nearbyPlace.name} 和 ${restaurant.name}，整条路线正在重新计算。`);
+      return;
+    }
     if (diningRequested && shoppingRequested) {
       const shoppingLabel = localShoppingQuery(text);
       await searchAndAddPlace(shoppingLabel, shoppingLabel, "17:30", "shopping");
@@ -698,6 +717,10 @@ export default function Home() {
     if (shoppingRequested) {
       const shoppingLabel = localShoppingQuery(text);
       await searchAndAddPlace(shoppingLabel, shoppingLabel, null, "shopping");
+      return;
+    }
+    if (nearbyPlaceType && nearbyDefinition) {
+      await searchAndAddPlace(nearbyDefinition.searchTerm, nearbyDefinition.label, null, "local", nearbyPlaceType);
       return;
     }
     if (diningRequested) {
@@ -794,6 +817,20 @@ export default function Home() {
       );
       return `${place.name}已加入${action.time ? ` ${action.time}` : "今天"}`;
     }
+    if (action.action === "nearby_search") {
+      const placeType = action.placeType ?? detectNearbyPlaceType(`${action.placeLabel ?? ""} ${action.placeQuery ?? ""} ${text}`);
+      const definition = placeType ? nearbyPlaceDefinitions[placeType] : null;
+      const label = action.placeLabel ?? definition?.label ?? action.placeQuery ?? "附近地点";
+      const place = await searchAndAddPlace(
+        action.placeQuery ?? definition?.searchTerm ?? localPlaceQuery(text),
+        label,
+        action.time,
+        "local",
+        placeType,
+        action.destinationQuery,
+      );
+      return `已找到附近的 ${place.name} 并加入行程`;
+    }
     if (action.action === "open_planner") {
       setTripPlanner(true);
       return "行前计划已打开";
@@ -809,7 +846,7 @@ export default function Home() {
   async function executeAgentActions(rawActions: AgentAction[], text: string) {
     const seen = new Set<string>();
     const actions = rawActions.filter((action) => {
-      const key = [action.action, action.destinationQuery, action.placeQuery, action.cuisineQuery, action.time].join("::");
+      const key = [action.action, action.destinationQuery, action.placeQuery, action.placeType, action.cuisineQuery, action.time].join("::");
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -1028,7 +1065,7 @@ export default function Home() {
         <section className="route-map" aria-label="今日行程地图">
           <div ref={mapHostRef} className="map-host"/>
           <div className="map-wash"/>
-          <header className="map-top"><div><span className="live-dot"/>{hasJourney ? routeState === "live" ? "OPEN ROUTE" : routeState === "error" ? "DIRECT LINE" : "ROUTING" : "OPEN WORLD"}</div><p>{hasJourney ? `今日路线 · ${timeline.length} 站` : "从世界任意城市开始"}</p><button aria-label="展开地图"><Icon name="map"/></button></header>
+          <header className="map-top"><div><span className="live-dot"/>{hasJourney ? routeState === "live" ? "OPEN ROUTE" : routeState === "error" ? "DIRECT LINE" : "ROUTING" : "OPEN WORLD"}</div><p>{hasJourney ? `今日路线 · ${timeline.length} 站` : "从世界任意城市开始"}</p><button className={map3D ? "map-dimension active" : "map-dimension"} type="button" aria-label={map3D ? "切换为 2D 地图" : "切换为 3D 地图"} aria-pressed={map3D} onClick={() => setMap3D((current) => !current)}>{map3D ? "2D" : "3D"}</button></header>
           {hasJourney ? <div className="map-key"><span><i className="hotel-color"/>酒店</span><span><i className="now-color"/>现在</span><span><i className="next-color"/>之后</span></div> : null}
           {routeState === "live" && hasJourney ? <small className="open-route-attribution">步行路线 · FOSSGIS OSRM</small> : null}
           {currentStop ? <button className="next-turn" onClick={() => setJourneyStarted(true)}><span><Icon name="route" size={21}/></span><div><small>下一段</small><b>{currentTransit}</b><p>预计 {currentStop.time} 出发</p></div><Icon name="arrow"/></button> : null}
