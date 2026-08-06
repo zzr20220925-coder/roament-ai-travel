@@ -33,14 +33,15 @@ async function respectPublicRateLimit() {
 }
 
 export async function POST(request: NextRequest) {
-  const body = await request.json() as { query?: string; label?: string; location?: { name?: string; lat?: number; lng?: number } };
+  const body = await request.json() as { query?: string; label?: string; category?: "attraction" | "shopping"; location?: { name?: string; lat?: number; lng?: number } };
   const query = body.query?.trim();
+  const category = body.category === "shopping" ? "shopping" : "attraction";
   const lat = body.location?.lat;
   const lng = body.location?.lng;
   if (!query) return NextResponse.json({ error: "请告诉我想去的地点" }, { status: 400 });
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return NextResponse.json({ error: "缺少旅行中心位置" }, { status: 400 });
 
-  const cacheKey = `${lat!.toFixed(2)},${lng!.toFixed(2)}:${query.toLowerCase()}`;
+  const cacheKey = `${lat!.toFixed(2)},${lng!.toFixed(2)}:${category}:${query.toLowerCase()}`;
   const cached = cache.get(cacheKey);
   if (cached && cached.expires > Date.now()) return NextResponse.json(cached.value, { headers: { "Cache-Control": "public, max-age=900" } });
 
@@ -78,16 +79,16 @@ export async function POST(request: NextRequest) {
         id: `osm-${item.osm_type ?? "place"}-${item.osm_id ?? item.place_id}`,
         name,
         localName,
-        category: "attraction" as const,
+        category,
         lat: placeLat,
         lng: placeLng,
         distance: distance < 1 ? `${Math.round(distance * 1000)} m` : `${distance.toFixed(1)} km`,
         address: item.display_name ?? body.location?.name ?? "地址待确认",
-        icon: "景",
+        icon: category === "shopping" ? "购" : "景",
         opening: openingHours ? `开放时间 ${openingHours}` : "开放时间待确认",
         summary: `这是 OpenStreetMap 匹配到的真实地点。已经以 ${body.location?.name ?? "旅行中心"} 为起点加入路线。`,
         tip: "开放时间、票务和具体入口可能变化，出发前请通过官方渠道确认。",
-        tags: ["OpenStreetMap", kind],
+        tags: ["OpenStreetMap", category === "shopping" ? "购物" : "景点", kind],
         famous: true,
         distanceKm: distance,
       }];

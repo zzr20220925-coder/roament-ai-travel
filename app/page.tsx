@@ -72,7 +72,7 @@ type AIPlanResponse = {
 
 type DiningIntent = { cuisine: string; cuisineLabel: string; minRating: number; budget: number; currency: Currency; time: string };
 type AgentAction = {
-  action: "destination_plan" | "place_search" | "dining_search" | "weather_replan" | "delay_replan" | "fatigue_replan" | "budget_replan" | "open_planner" | "general";
+  action: "destination_plan" | "place_search" | "shopping_search" | "dining_search" | "weather_replan" | "delay_replan" | "fatigue_replan" | "budget_replan" | "open_planner" | "general";
   destinationQuery: string | null;
   destinationLabel: string | null;
   tripDays: number | null;
@@ -87,6 +87,7 @@ type AgentAction = {
   time: string | null;
   explanation: string;
 };
+type AgentResponse = { configured?: boolean; actions?: AgentAction[]; action?: AgentAction; explanation?: string; error?: string };
 type DiningResult = {
   id: string;
   name: string;
@@ -447,8 +448,8 @@ export default function Home() {
     }, 620);
   }
 
-  async function searchDining(prompt: string, intelligentIntent?: DiningIntent) {
-    setDiningOpen(true);
+  async function searchDining(prompt: string, intelligentIntent?: DiningIntent, showResults = true) {
+    if (showResults) setDiningOpen(true);
     setDiningLoading(true);
     setDiningError("");
     setDiningResults([]);
@@ -458,22 +459,29 @@ export default function Home() {
       if (!response.ok) {
         throw new Error(data.error ?? "暂时没有找到合适的餐厅");
       }
-      setDiningIntent(data.intent ?? null);
-      setDiningResults(data.places ?? []);
-      setUpdateNote(`已从 OpenStreetMap 找到 ${data.places?.length ?? 0} 家附近餐厅，选一家就能加入今天的路线。`);
+      const resolvedIntent = data.intent ?? intelligentIntent;
+      if (!resolvedIntent) throw new Error("没有识别到完整的用餐需求");
+      const resolvedPlaces = data.places ?? [];
+      setDiningIntent(resolvedIntent);
+      setDiningResults(resolvedPlaces);
+      if (showResults) setUpdateNote(`已从 OpenStreetMap 找到 ${resolvedPlaces.length} 家附近餐厅，选一家就能加入今天的路线。`);
+      return { intent: resolvedIntent, places: resolvedPlaces };
     } catch (error) {
-      setDiningError(error instanceof Error ? error.message : "餐厅搜索遇到问题，请稍后重试");
+      const message = error instanceof Error ? error.message : "餐厅搜索遇到问题，请稍后重试";
+      setDiningError(message);
+      throw new Error(message);
     } finally {
       setDiningLoading(false);
     }
   }
 
-  function addDiningToTrip(result: DiningResult) {
-    const time = diningIntent?.time ?? "19:30";
+  function addDiningToTrip(result: DiningResult, intentOverride?: DiningIntent) {
+    const activeDiningIntent = intentOverride ?? diningIntent;
+    const time = activeDiningIntent?.time ?? "19:30";
     const place: Place = {
       id: `dining-${result.id}`,
       name: result.name,
-      localName: diningIntent?.cuisineLabel ?? "晚餐",
+      localName: activeDiningIntent?.cuisineLabel ?? "晚餐",
       category: "restaurant",
       lat: result.lat,
       lng: result.lng,
@@ -481,9 +489,9 @@ export default function Home() {
       address: result.address,
       icon: "食",
       opening: result.openingLabel,
-      summary: `从 OpenStreetMap 找到的附近${diningIntent?.cuisineLabel ?? "餐厅"}候选。`,
+      summary: `从 OpenStreetMap 找到的附近${activeDiningIntent?.cuisineLabel ?? "餐厅"}候选。`,
       tip: "出发前查看菜单、营业时间和是否需要预订。",
-      tags: ["晚餐", diningIntent?.cuisineLabel ?? "餐厅", "OpenStreetMap"],
+      tags: ["晚餐", activeDiningIntent?.cuisineLabel ?? "餐厅", "OpenStreetMap"],
     };
     const stop: TripStop = {
       id: `stop-dining-${result.id}`,
@@ -492,7 +500,7 @@ export default function Home() {
       place,
       status: "next",
       transit: "路线正在重新计算",
-      note: `${diningIntent?.cuisineLabel ?? "晚餐"} · ${result.distance} · 营业时间请确认`,
+      note: `${activeDiningIntent?.cuisineLabel ?? "晚餐"} · ${result.distance} · 营业时间请确认`,
     };
     setPlaces((current) => [place, ...current.filter((item) => item.id !== place.id)]);
     setTimeline((current) => [...current.filter((item) => item.place.id !== place.id && !(item.place.category === "restaurant" && item.status !== "done" && item.time >= "18:00")), stop].sort((a, b) => a.time.localeCompare(b.time)));
@@ -500,14 +508,15 @@ export default function Home() {
     setDiningOpen(false);
     setJourneyStarted(false);
     setUpdateNote(`已把 ${result.name} 加入今晚 ${time}，并开始用开放路线服务重新计算整条步行路线。`);
+    return place;
   }
 
-  async function searchAndAddPlace(query: string, label?: string | null, requestedTime?: string | null) {
+  async function searchAndAddPlace(query: string, label?: string | null, requestedTime?: string | null, category: "attraction" | "shopping" = "attraction") {
     setUpdateNote(`正在 OpenStreetMap 搜索“${label ?? query}”…`);
     const response = await fetch("/api/place-search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, label, location }),
+      body: JSON.stringify({ query, label, location, category }),
     });
     const data = await response.json() as { places?: Place[]; error?: string };
     if (!response.ok) throw new Error(data.error ?? "暂时没有找到这个地点");
@@ -518,7 +527,7 @@ export default function Home() {
     if (existingStop) {
       setSelectedId(place.id);
       setUpdateNote(`${place.name} 已经在今天 ${existingStop.time} 的行程里。`);
-      return;
+      return place;
     }
 
     const explicitTime = requestedTime && /^([01]\d|2[0-3]):[0-5]\d$/.test(requestedTime) ? requestedTime : null;
@@ -548,6 +557,7 @@ export default function Home() {
     setJourneyStarted(false);
     setAiState("live");
     setUpdateNote(`已找到 ${place.name}，加入今天 ${time}；OpenStreetMap 步行路线正在重新计算。`);
+    return place;
   }
 
   function localPlaceQuery(text: string) {
@@ -555,6 +565,14 @@ export default function Home() {
       .replace(/^(我想|想要|我要|帮我|请|能不能|可以)?\s*(去|参观|看看|看|前往|加入|安排)?/i, "")
       .replace(/(加进|加入|放进|安排进)?\s*(今天|我的)?\s*(的)?\s*行程(里|中)?[。！？!?.]*$/i, "")
       .trim() || text.trim();
+  }
+
+  function localShoppingQuery(text: string) {
+    const segment = text.split(/顺便|然后|之后|并且|以及|\bthen\b/i).find((part) => /购物|商场|百货|逛|shopping|mall|department store/i.test(part)) ?? text;
+    return segment
+      .replace(/^(今晚|今天|晚上)?\s*(我想|想要|我要|帮我|请|能不能|可以)?\s*(去|到|逛)?/i, "")
+      .replace(/(购物|逛逛|逛一下|逛街|shopping).*$/i, "")
+      .trim() || localPlaceQuery(segment);
   }
 
   async function planDestinationTrip(prompt: string, destinationQuery: string, destinationLabel: string, requestedDays: number, requestedStartDate?: string | null) {
@@ -665,7 +683,24 @@ export default function Home() {
       if (destinationIntents.length > 1) setTripLibraryOpen(true);
       return;
     }
-    if (/吃|餐厅|晚餐|料理|法餐|法国|restaurant|dinner/i.test(text)) {
+    const diningRequested = /吃|餐厅|晚餐|料理|法餐|法国|restaurant|dinner/i.test(text);
+    const shoppingRequested = /购物|商场|百货|逛街|shopping|mall|department store/i.test(text);
+    if (diningRequested && shoppingRequested) {
+      const shoppingLabel = localShoppingQuery(text);
+      await searchAndAddPlace(shoppingLabel, shoppingLabel, "17:30", "shopping");
+      const dining = await searchDining(text, undefined, false);
+      const restaurant = dining.places[0];
+      if (!restaurant) throw new Error("附近没有找到符合菜系的餐厅");
+      addDiningToTrip(restaurant, dining.intent);
+      setUpdateNote(`已同时安排 ${shoppingLabel} 和 ${restaurant.name}，整条路线正在重新计算。`);
+      return;
+    }
+    if (shoppingRequested) {
+      const shoppingLabel = localShoppingQuery(text);
+      await searchAndAddPlace(shoppingLabel, shoppingLabel, null, "shopping");
+      return;
+    }
+    if (diningRequested) {
       await searchDining(text);
       return;
     }
@@ -721,6 +756,85 @@ export default function Home() {
     }
   }
 
+  async function executeAgentAction(action: AgentAction, text: string, autoCommitDining: boolean) {
+    if (action.action === "destination_plan") {
+      const trip = await planDestinationTrip(
+        text,
+        action.destinationQuery ?? action.destinationLabel ?? localPlaceQuery(text),
+        action.destinationLabel ?? action.destinationQuery ?? "目的地",
+        action.tripDays ?? 3,
+        action.startDate,
+      );
+      if (!trip) throw new Error(`${action.destinationLabel ?? "目的地"}行程生成失败`);
+      return `${trip.title}行程已生成`;
+    }
+    if (action.action === "dining_search") {
+      const intent: DiningIntent = {
+        cuisine: action.cuisineQuery ?? "Local restaurant",
+        cuisineLabel: action.cuisineLabel ?? "当地餐厅",
+        minRating: action.minRating ?? 4,
+        budget: action.budgetAmount ?? 20,
+        currency: action.budgetCurrency ?? "EUR",
+        time: action.time ?? "19:30",
+      };
+      const dining = await searchDining(text, intent, !autoCommitDining);
+      if (!autoCommitDining) return `已准备 ${dining.places.length} 家${intent.cuisineLabel}候选`;
+      const restaurant = dining.places[0];
+      if (!restaurant) throw new Error(`附近没有找到${intent.cuisineLabel}`);
+      addDiningToTrip(restaurant, dining.intent);
+      return `已暂选最近的 ${restaurant.name}，加入 ${dining.intent.time}`;
+    }
+    if (action.action === "shopping_search" || action.action === "place_search") {
+      const label = action.placeLabel ?? action.placeQuery ?? "目的地";
+      const place = await searchAndAddPlace(
+        action.placeQuery ?? localPlaceQuery(text),
+        label,
+        action.time,
+        action.action === "shopping_search" ? "shopping" : "attraction",
+      );
+      return `${place.name}已加入${action.time ? ` ${action.time}` : "今天"}`;
+    }
+    if (action.action === "open_planner") {
+      setTripPlanner(true);
+      return "行前计划已打开";
+    }
+    if (action.action === "weather_replan") await replanTrip(text, "rain");
+    else if (action.action === "delay_replan") await replanTrip(text, "late");
+    else if (action.action === "fatigue_replan") await replanTrip(text, "tired");
+    else if (action.action === "budget_replan") await replanTrip(text, "budget");
+    else await replanTrip(text);
+    return action.explanation;
+  }
+
+  async function executeAgentActions(rawActions: AgentAction[], text: string) {
+    const seen = new Set<string>();
+    const actions = rawActions.filter((action) => {
+      const key = [action.action, action.destinationQuery, action.placeQuery, action.cuisineQuery, action.time].join("::");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 6);
+    const autoCommitDining = actions.length > 1;
+    const completed: string[] = [];
+    const failed: string[] = [];
+
+    for (const [index, action] of actions.entries()) {
+      setAiThinking(true);
+      setUpdateNote(`已识别 ${actions.length} 个意图，正在处理第 ${index + 1} 个：${action.explanation}`);
+      try {
+        completed.push(await executeAgentAction(action, text, autoCommitDining));
+      } catch (error) {
+        failed.push(error instanceof Error ? error.message : action.explanation);
+      }
+    }
+
+    if (!completed.length) throw new Error(failed[0] ?? "没有成功执行任何行程动作");
+    setAiState(failed.length ? "error" : "live");
+    const routeCopy = autoCommitDining ? "已把成功找到的地点统一合并，整条路线正在重新计算。" : "";
+    const failureCopy = failed.length ? `另有 ${failed.length} 项未完成：${failed.join("；")}。` : "";
+    setUpdateNote(`已完成 ${completed.length}/${actions.length} 个意图：${completed.join("；")}。${routeCopy}${failureCopy}`);
+  }
+
   async function submitCommand(event: FormEvent) {
     event.preventDefault();
     const text = command.trim();
@@ -759,43 +873,15 @@ export default function Home() {
     setUpdateNote("OpenAI 正在理解你的真实意图，并准备调用合适的旅行工具…");
     try {
       const response = await fetch("/api/agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text, location, timeline: timeline.map((stop) => ({ time: stop.time, name: stop.place.name, status: stop.status })) }) });
-      const data = await response.json() as { configured?: boolean; action?: AgentAction; error?: string };
-      if (!response.ok || !data.action) {
+      const data = await response.json() as AgentResponse;
+      const actions = data.actions?.length ? data.actions : data.action ? [data.action] : [];
+      if (!response.ok || !actions.length) {
         setAiState(response.status === 503 ? "unconfigured" : "error");
         await runLocalCommand(text);
         return;
       }
       setAiState("live");
-      const action = data.action;
-      if (action.action === "destination_plan") {
-        await planDestinationTrip(
-          text,
-          action.destinationQuery ?? action.destinationLabel ?? localPlaceQuery(text),
-          action.destinationLabel ?? action.destinationQuery ?? "目的地",
-          action.tripDays ?? 3,
-          action.startDate,
-        );
-      } else if (action.action === "dining_search") {
-        const intent: DiningIntent = {
-          cuisine: action.cuisineQuery ?? "Local restaurant",
-          cuisineLabel: action.cuisineLabel ?? "当地餐厅",
-          minRating: action.minRating ?? 4,
-          budget: action.budgetAmount ?? 20,
-          currency: action.budgetCurrency ?? "EUR",
-          time: action.time ?? "19:30",
-        };
-        setUpdateNote(action.explanation);
-        await searchDining(text, intent);
-      } else if (action.action === "place_search") {
-        await searchAndAddPlace(action.placeQuery ?? localPlaceQuery(text), action.placeLabel ?? localPlaceQuery(text), action.time);
-      } else if (action.action === "open_planner") {
-        setTripPlanner(true);
-        setUpdateNote(action.explanation);
-      } else if (action.action === "weather_replan") await replanTrip(text, "rain");
-      else if (action.action === "delay_replan") await replanTrip(text, "late");
-      else if (action.action === "fatigue_replan") await replanTrip(text, "tired");
-      else if (action.action === "budget_replan") await replanTrip(text, "budget");
-      else await replanTrip(text);
+      await executeAgentActions(actions, text);
     } catch (error) {
       setAiState("error");
       try {

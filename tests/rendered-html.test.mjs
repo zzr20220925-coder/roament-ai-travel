@@ -65,7 +65,10 @@ test("uses OpenAI with verified open-map candidates and keeps responsive behavio
   assert.match(placeSearchRoute, /nominatim\.openstreetmap\.org/);
   assert.match(placeSearchRoute, /provider:\s*"openstreetmap"/);
   assert.match(agentRoute, /place_search/);
+  assert.match(agentRoute, /shopping_search/);
   assert.match(agentRoute, /destination_plan/);
+  assert.match(agentRoute, /actions:\s*plan\.actions\.slice\(0, 6\)|const actions = plan\.actions\.slice\(0, 6\)/);
+  assert.match(agentRoute, /maxItems:\s*6/);
   assert.match(agentRoute, /tripDays/);
   assert.match(agentRoute, /startDate/);
   assert.match(routesRoute, /routing\.openstreetmap\.de/);
@@ -81,6 +84,9 @@ test("uses OpenAI with verified open-map candidates and keeps responsive behavio
   assert.match(page, /日落/);
   assert.match(page, /resolvePlanDays/);
   assert.match(page, /planDestinationTrip/);
+  assert.match(page, /executeAgentActions/);
+  assert.match(page, /for \(const \[index, action\] of actions\.entries\(\)\)/);
+  assert.match(page, /action\.action === "shopping_search"/);
   assert.match(page, /OpenAI 正在按你的节奏、预算和兴趣编排多日路线/);
   assert.doesNotMatch(envExample, /GOOGLE_MAPS|GOOGLE_SEARCH/i);
 
