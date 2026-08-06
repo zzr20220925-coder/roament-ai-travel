@@ -96,6 +96,12 @@ test("uses OpenAI with verified open-map candidates and keeps responsive behavio
   assert.match(css, /height:min\(92svh,820px\)/);
   assert.match(css, /\.journey-scroll\{[^}]*overflow-y:auto/);
   assert.match(css, /\.focus-pane\{[^}]*overflow:visible/);
+  assert.match(css, /html,body\{overflow-x:hidden\}/);
+  assert.match(css, /\.command-layout\{width:100%;max-width:100%;min-width:0;[^}]*overflow-x:clip/);
+  assert.match(css, /\.focus-pane\{order:1;[^}]*overflow:hidden/);
+  assert.match(css, /\.map-host,\.map-host\.maplibregl-map,[^}]*max-width:100%/);
+  assert.match(css, /max-width:100dvw;overflow-x:hidden/);
+  assert.doesNotMatch(css, /@media\(max-width:900px\)\{body\{overflow:auto\}/);
   assert.match(css, /\.day-line\{[^}]*background:transparent/);
   assert.doesNotMatch(css, /grid-template-areas:"focus map" "timeline map"/);
 });
