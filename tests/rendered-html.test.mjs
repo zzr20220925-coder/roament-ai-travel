@@ -23,6 +23,8 @@ test("server-renders the completed travel agent", async () => {
   assert.match(html, /<html lang="zh-CN">/i);
   assert.match(html, /<title>michi — 会接管变化的 AI 私人导游<\/title>/i);
   assert.match(html, /class="michi-shell"/);
+  assert.match(html, /class="journey-column"/);
+  assert.match(html, /class="journey-scroll"/);
   assert.match(html, /aria-label="今日行程地图"/);
   assert.match(html, /旅行中心/);
   assert.match(html, /今天想去哪里？/);
@@ -86,4 +88,8 @@ test("uses OpenAI with verified open-map candidates and keeps responsive behavio
   assert.match(css, /@media\(max-width:430px\)/);
   assert.match(css, /min-height:100svh/);
   assert.match(css, /height:min\(92svh,820px\)/);
+  assert.match(css, /\.journey-scroll\{[^}]*overflow-y:auto/);
+  assert.match(css, /\.focus-pane\{[^}]*overflow:visible/);
+  assert.match(css, /\.day-line\{[^}]*background:transparent/);
+  assert.doesNotMatch(css, /grid-template-areas:"focus map" "timeline map"/);
 });

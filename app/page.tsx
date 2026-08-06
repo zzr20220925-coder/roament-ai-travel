@@ -881,7 +881,9 @@ export default function Home() {
       </header>
 
       <section className={hasJourney ? "command-layout" : "command-layout welcome-mode"}>
-        <div className="focus-pane">
+        <div className="journey-column">
+          <div className="journey-scroll">
+            <div className="focus-pane">
           {currentStop ? <>
             <div className="today-context"><span>{location.name} · 当地行程</span><i/><span>第 {activeDay} 天</span></div>
             <div className="focus-head"><div><h1>早上好，<br/>今天交给我。</h1><p>你只需要按下一步走。天气、延误和体力变化，由我继续安排。</p></div><span className="day-mark">{String(activeDay).padStart(2, "0")}<small>DAY</small></span></div>
@@ -910,6 +912,31 @@ export default function Home() {
             <div className="welcome-examples"><button onClick={() => setCommand("9月1日开始去东京5天")}>东京 5 天</button><button onClick={() => setCommand("纽约玩五天再去巴黎")}>纽约＋巴黎</button><button onClick={() => setHotelEditor(true)}>输入酒店</button></div>
             <div className={aiThinking ? "welcome-status thinking" : "welcome-status"}><i/><span>{updateNote}</span></div>
           </div>}
+            </div>
+
+            {hasJourney ? <section className="day-line">
+            <header><div><h2>第 {activeDay} 天怎么走</h2><p>{tripDays.find((day) => day.day === activeDay)?.title ?? "不是景点清单，而是一条可以随时改变的路线。"}</p></div><span>{timeline.filter((stop) => stop.status === "done").length}/{timeline.length} 完成</span></header>
+            {tripDays.length > 1 ? <div className="day-tabs" aria-label="选择行程日期">{tripDays.map((day) => <button key={day.day} className={day.day === activeDay ? "active" : ""} onClick={() => selectTripDay(day.day)}>D{day.day}<span>{day.title}</span></button>)}</div> : null}
+            <div className="timeline-list">
+              {timeline.map((stop, index) => (
+                <button key={stop.id} className={`timeline-row ${stop.status}`} onClick={() => { setSelectedId(stop.place.id); setGuideMode("quick"); setGuideOpen(true); }}>
+                  <time>{stop.time}<small>{stop.endTime}</small></time>
+                  <span className="timeline-node">{stop.status === "done" ? "✓" : String(index + 1).padStart(2, "0")}</span>
+                  <div><span>{stop.status === "now" ? "现在准备" : stop.status === "done" ? "已经完成" : stop.status === "optional" ? "体力允许再去" : stop.transit}</span><h3>{stop.place.name}</h3><p>{stop.note}</p></div>
+                  <Icon name={stop.status === "now" ? "arrow" : "book"} size={18}/>
+                </button>
+              ))}
+            </div>
+            </section> : null}
+          </div>
+
+          <section className="ai-command" aria-label="AI 实时改行程">
+            {hasJourney ? <div className="scenario-actions">
+              {(Object.keys(scenarioCopy) as Scenario[]).map((scenario) => <button key={scenario} className={activeScenario === scenario ? "active" : ""} onClick={() => replanTrip(scenarioCopy[scenario].prompt, scenario)} disabled={replanning || aiThinking}><Icon name={scenarioCopy[scenario].icon} size={16}/>{scenarioCopy[scenario].label}</button>)}
+              <span className={`engine-status ${aiState}`}><i/>{aiState === "live" ? "OPENAI + OPEN MAP" : "OPEN MAP"}</span>
+            </div> : null}
+            <form onSubmit={submitCommand}><span><Icon name="spark" size={19}/></span><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="例如：9月1日开始去纽约5天，或者我想去凯旋门" aria-label="输入行程变化"/><button type="submit" aria-label="发送给 Michi" disabled={aiThinking || planLoading}><Icon name="send" size={18}/></button></form>
+          </section>
         </div>
 
         <section className="route-map" aria-label="今日行程地图">
@@ -919,29 +946,6 @@ export default function Home() {
           {hasJourney ? <div className="map-key"><span><i className="hotel-color"/>酒店</span><span><i className="now-color"/>现在</span><span><i className="next-color"/>之后</span></div> : null}
           {routeState === "live" && hasJourney ? <small className="open-route-attribution">步行路线 · FOSSGIS OSRM</small> : null}
           {currentStop ? <button className="next-turn" onClick={() => setJourneyStarted(true)}><span><Icon name="route" size={21}/></span><div><small>下一段</small><b>{currentTransit}</b><p>预计 {currentStop.time} 出发</p></div><Icon name="arrow"/></button> : null}
-        </section>
-
-        {hasJourney ? <section className="day-line">
-          <header><div><h2>第 {activeDay} 天怎么走</h2><p>{tripDays.find((day) => day.day === activeDay)?.title ?? "不是景点清单，而是一条可以随时改变的路线。"}</p></div><span>{timeline.filter((stop) => stop.status === "done").length}/{timeline.length} 完成</span></header>
-          {tripDays.length > 1 ? <div className="day-tabs" aria-label="选择行程日期">{tripDays.map((day) => <button key={day.day} className={day.day === activeDay ? "active" : ""} onClick={() => selectTripDay(day.day)}>D{day.day}<span>{day.title}</span></button>)}</div> : null}
-          <div className="timeline-list">
-            {timeline.map((stop, index) => (
-              <button key={stop.id} className={`timeline-row ${stop.status}`} onClick={() => { setSelectedId(stop.place.id); setGuideMode("quick"); setGuideOpen(true); }}>
-                <time>{stop.time}<small>{stop.endTime}</small></time>
-                <span className="timeline-node">{stop.status === "done" ? "✓" : String(index + 1).padStart(2, "0")}</span>
-                <div><span>{stop.status === "now" ? "现在准备" : stop.status === "done" ? "已经完成" : stop.status === "optional" ? "体力允许再去" : stop.transit}</span><h3>{stop.place.name}</h3><p>{stop.note}</p></div>
-                <Icon name={stop.status === "now" ? "arrow" : "book"} size={18}/>
-              </button>
-            ))}
-          </div>
-        </section> : null}
-
-        <section className="ai-command" aria-label="AI 实时改行程">
-          {hasJourney ? <div className="scenario-actions">
-            {(Object.keys(scenarioCopy) as Scenario[]).map((scenario) => <button key={scenario} className={activeScenario === scenario ? "active" : ""} onClick={() => replanTrip(scenarioCopy[scenario].prompt, scenario)} disabled={replanning || aiThinking}><Icon name={scenarioCopy[scenario].icon} size={16}/>{scenarioCopy[scenario].label}</button>)}
-            <span className={`engine-status ${aiState}`}><i/>{aiState === "live" ? "OPENAI + OPEN MAP" : "OPEN MAP"}</span>
-          </div> : null}
-          <form onSubmit={submitCommand}><span><Icon name="spark" size={19}/></span><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="例如：9月1日开始去纽约5天，或者我想去凯旋门" aria-label="输入行程变化"/><button type="submit" aria-label="发送给 Michi" disabled={aiThinking || planLoading}><Icon name="send" size={18}/></button></form>
         </section>
       </section>
 
