@@ -37,7 +37,7 @@ test("server-renders the completed travel agent", async () => {
 });
 
 test("uses OpenAI with verified open-map candidates and keeps responsive behavior", async () => {
-  const [page, css, envExample, configRoute, diningRoute, placeSearchRoute, agentRoute, routesRoute, itineraryRoute] = await Promise.all([
+  const [page, css, envExample, configRoute, diningRoute, placeSearchRoute, agentRoute, routesRoute, itineraryRoute, weatherRoute, weatherUtil] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
@@ -47,6 +47,8 @@ test("uses OpenAI with verified open-map candidates and keeps responsive behavio
     readFile(new URL("../app/api/agent/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/routes/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/itinerary/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/weather/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/weather.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /tiles\.openfreemap\.org\/styles\/liberty/);
@@ -69,6 +71,12 @@ test("uses OpenAI with verified open-map candidates and keeps responsive behavio
   assert.match(itineraryRoute, /type:\s*"json_schema"/);
   assert.match(itineraryRoute, /allowedIds\.has\(stop\.placeId\)/);
   assert.match(itineraryRoute, /tripStartDate/);
+  assert.match(weatherRoute, /buildWeatherUrl/);
+  assert.match(weatherUtil, /api\.open-meteo\.com\/v1\/forecast/);
+  assert.match(weatherUtil, /sunrise,sunset/);
+  assert.match(weatherUtil, /timezone.*auto/);
+  assert.match(page, /weather-glance/);
+  assert.match(page, /日落/);
   assert.match(page, /resolvePlanDays/);
   assert.match(page, /planDestinationTrip/);
   assert.match(page, /OpenAI 正在按你的节奏、预算和兴趣编排多日路线/);

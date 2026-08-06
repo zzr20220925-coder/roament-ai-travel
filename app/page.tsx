@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent, SymbolLayerSpecification } from "maplibre-gl";
 import { parseDestinationIntents } from "@/lib/trip-intent";
+import type { WeatherData } from "@/lib/weather";
 
 type Category = "attraction" | "restaurant" | "shopping";
 type StopStatus = "done" | "now" | "next" | "optional";
@@ -247,6 +248,9 @@ export default function Home() {
   const [savedTrips, setSavedTrips] = useState<SavedTrip[]>([]);
   const [activeTripId, setActiveTripId] = useState("");
   const [tripLibraryOpen, setTripLibraryOpen] = useState(false);
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState("");
 
   const currentStop = timeline.find((stop) => stop.status === "now") ?? timeline[0];
   const selected = places.find((place) => place.id === selectedId) ?? currentStop?.place ?? null;
@@ -358,6 +362,33 @@ export default function Home() {
     loadOpenRoute();
     return () => controller.abort();
   }, [location.lat, location.lng, routeStops]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!hasJourney) {
+      return () => controller.abort();
+    }
+    async function loadWeather() {
+      setWeatherLoading(true);
+      setWeatherError("");
+      setWeather(null);
+      try {
+        const response = await fetch(`/api/weather?lat=${encodeURIComponent(location.lat)}&lng=${encodeURIComponent(location.lng)}`, { signal: controller.signal });
+        const data = await response.json() as WeatherData & { error?: string };
+        if (!response.ok || !data.current) throw new Error(data.error ?? "天气服务暂时不可用");
+        setWeather(data);
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") {
+          setWeather(null);
+          setWeatherError(error instanceof Error ? error.message : "天气服务暂时不可用");
+        }
+      } finally {
+        if (!controller.signal.aborted) setWeatherLoading(false);
+      }
+    }
+    loadWeather();
+    return () => controller.abort();
+  }, [hasJourney, location.lat, location.lng]);
 
   async function explore(payload: { query?: string; lat?: number; lng?: number }) {
     setSearching(true);
@@ -854,6 +885,9 @@ export default function Home() {
           {currentStop ? <>
             <div className="today-context"><span>{location.name} · 当地行程</span><i/><span>第 {activeDay} 天</span></div>
             <div className="focus-head"><div><h1>早上好，<br/>今天交给我。</h1><p>你只需要按下一步走。天气、延误和体力变化，由我继续安排。</p></div><span className="day-mark">{String(activeDay).padStart(2, "0")}<small>DAY</small></span></div>
+            <div className={weatherLoading ? "weather-glance loading" : "weather-glance"} aria-live="polite">
+              {weatherLoading ? <><span className="weather-pulse"/><p>正在加载当地天气与日落时间…</p></> : weather ? <><span className="weather-icon" aria-hidden="true">{weather.current.icon}</span><div><b>{weather.current.temperature == null ? "—" : `${Math.round(weather.current.temperature)}°`} · {weather.current.label}</b><small>体感 {weather.current.apparentTemperature == null ? "—" : `${Math.round(weather.current.apparentTemperature)}°`} · 风速 {weather.current.windSpeed == null ? "—" : `${Math.round(weather.current.windSpeed)} km/h`}</small></div><div><b>降雨 {weather.daily[0]?.precipitationProbability ?? 0}%</b><small>{weather.current.precipitation ?? 0} mm</small></div><div><b>日出 {weather.daily[0]?.sunrise ?? "—"}</b><small>日落 {weather.daily[0]?.sunset ?? "—"}</small></div><em>{weather.timezoneAbbreviation || weather.timezone}</em></> : <><span className="weather-icon" aria-hidden="true">🌡️</span><p>{weatherError || "天气暂时不可用，不影响行程规划"}</p></>}
+            </div>
 
             <article className="next-action">
               <div className="action-number">NEXT <b>01</b></div>
