@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent, SymbolLayerSpecification } from "maplibre-gl";
-import { parseDestinationIntent } from "@/lib/trip-intent";
+import { parseDestinationIntents } from "@/lib/trip-intent";
 
 type Category = "attraction" | "restaurant" | "shopping";
 type StopStatus = "done" | "now" | "next" | "optional";
@@ -46,6 +46,16 @@ type TripDay = {
   day: number;
   title: string;
   stops: TripStop[];
+};
+
+type SavedTrip = {
+  id: string;
+  title: string;
+  destinationQuery: string;
+  startDate: string | null;
+  location: ExploreResult["location"];
+  places: Place[];
+  tripDays: TripDay[];
 };
 
 type AIPlanResponse = {
@@ -100,16 +110,6 @@ type OpenRoute = {
   legs?: Array<{ duration?: string; distanceMeters?: number }>;
 };
 
-const parisPlaces: Place[] = [
-  { id: "paris-breakfast", name: "圣日耳曼早餐", localName: "Café de Flore", category: "restaurant", lat: 48.8541, lng: 2.3325, distance: "650 m", address: "172 Boulevard Saint-Germain, Paris", icon: "啡", opening: "07:30–01:30", summary: "左岸知识分子文化的著名坐标。比起打卡，它更适合用一杯咖啡观察巴黎如何开始一天。", tip: "不执着露台第一排，通常能更快入座，也更接近咖啡馆真正的日常。", tags: ["咖啡", "左岸", "经典"] },
-  { id: "paris-louvre", name: "卢浮宫", localName: "Musée du Louvre", category: "attraction", lat: 48.8606, lng: 2.3376, distance: "1.8 km", address: "Rue de Rivoli, Paris", icon: "馆", opening: "11:15 预约入场", summary: "从中世纪城堡到世界级博物馆，卢浮宫不是一座能被一次看完的收藏盒，而是巴黎权力、审美与城市发展的立体时间线。", tip: "从卡鲁塞尔凯旋门一侧进入通常更从容。第一次到访只选一个主题，比追逐所有名作更有收获。", tags: ["艺术", "历史", "建筑"] },
-  { id: "paris-tuileries", name: "杜乐丽花园", localName: "Jardin des Tuileries", category: "attraction", lat: 48.8635, lng: 2.3275, distance: "1.3 km", address: "Place de la Concorde, Paris", icon: "园", opening: "当前开放", summary: "卢浮宫与协和广场之间的城市客厅，是理解巴黎轴线、公共生活与法式园林最轻松的一站。", tip: "傍晚沿中央轴线向西走，光线、雕塑和城市层次最好。", tags: ["花园", "散步", "免费"] },
-  { id: "paris-orsay", name: "奥赛博物馆", localName: "Musée d’Orsay", category: "attraction", lat: 48.86, lng: 2.3266, distance: "1.1 km", address: "Esplanade Valéry Giscard d’Estaing, Paris", icon: "艺", opening: "18:00 前入场", summary: "旧火车站穹顶下的印象派收藏，让艺术、工业建筑与塞纳河景观自然连在一起。", tip: "先上顶层看大钟与城市，再顺楼层向下参观，体验更完整。", tags: ["印象派", "摄影", "室内"] },
-  { id: "paris-river", name: "塞纳河日落", localName: "Quai de Seine", category: "attraction", lat: 48.8584, lng: 2.3197, distance: "1.2 km", address: "Quai Anatole France, Paris", icon: "夕", opening: "日落约 18:47", summary: "从河岸看巴黎，宏大地标会重新变回生活背景。桥梁、船只和两岸立面在日落前后最有层次。", tip: "提前二十分钟到河岸，避开正对人流的台阶，向西侧多走一小段。", tags: ["日落", "散步", "摄影"] },
-  { id: "paris-dinner", name: "左岸小馆晚餐", localName: "Bistrot du 6e", category: "restaurant", lat: 48.8528, lng: 2.3342, distance: "420 m", address: "6e arrondissement, Paris", icon: "食", opening: "19:30 已留位", summary: "把晚餐安排回酒店所在街区，能让一天自然收束，也保留根据体力提前结束的余地。", tip: "传统小馆桌距较近、节奏偏慢，若有饮食禁忌可提前准备法语说明。", tags: ["小馆", "当地菜", "松弛"] },
-  { id: "paris-shop", name: "乐蓬马歇百货", localName: "Le Bon Marché", category: "shopping", lat: 48.8512, lng: 2.3244, distance: "900 m", address: "24 Rue de Sèvres, Paris", icon: "购", opening: "10:00–20:00", summary: "世界上最早的现代百货之一，以克制的空间设计、精选品牌和食品馆著称。", tip: "与相邻食品馆一起安排，伴手礼效率更高。", tags: ["设计", "百货", "美食"] },
-];
-
 const scenarioCopy: Record<Scenario, { label: string; icon: IconName; prompt: string }> = {
   rain: { label: "下雨了", icon: "rain", prompt: "现在下雨了，请尽量换成室内地点并减少露天步行，保留最重要的行程。" },
   late: { label: "晚了 1 小时", icon: "clock", prompt: "我比原计划晚了 1 小时，请重排行程，减少赶路但尽量保留最值得去的地点。" },
@@ -148,13 +148,9 @@ function buildTimeline(places: Place[]): TripStop[] {
   const attractions = places.filter((place) => place.category === "attraction");
   const restaurants = places.filter((place) => place.category === "restaurant");
   const shopping = places.filter((place) => place.category === "shopping");
-  const picks = [
-    restaurants[0] ?? parisPlaces[0],
-    attractions[0] ?? parisPlaces[1],
-    attractions[1] ?? parisPlaces[2],
-    shopping[0] ?? attractions[2] ?? parisPlaces[3],
-    attractions[3] ?? attractions[2] ?? parisPlaces[4],
-  ];
+  const prioritized = [restaurants[0], attractions[0], attractions[1], shopping[0], attractions[2], attractions[3], ...places];
+  const seen = new Set<string>();
+  const picks = prioritized.filter((place): place is Place => place != null && !seen.has(place.id) && Boolean(seen.add(place.id))).slice(0, 5);
   const times = [["09:00", "09:45"], ["10:40", "13:00"], ["13:30", "15:00"], ["16:00", "17:30"], ["18:30", "19:30"]];
   return picks.map((place, index) => ({
     id: `stop-${index}-${place.id}`,
@@ -210,20 +206,17 @@ function openDirectionsUrl(origin: { lat: number; lng: number }, destination: { 
   return `https://www.openstreetmap.org/directions?engine=fossgis_osrm_foot&route=${route}`;
 }
 
-const initialTimeline = buildTimeline(parisPlaces);
-const initialTripDays: TripDay[] = [{ day: 1, title: "巴黎经典与左岸", stops: initialTimeline }];
-
 export default function Home() {
   const mapHostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const maplibreRef = useRef<typeof import("maplibre-gl") | null>(null);
-  const [location, setLocation] = useState({ name: "巴黎 · 圣日耳曼", lat: 48.8546, lng: 2.3336 });
-  const [query, setQuery] = useState("Saint-Germain-des-Prés, Paris");
-  const [places, setPlaces] = useState<Place[]>(parisPlaces);
-  const [timeline, setTimeline] = useState<TripStop[]>(initialTimeline);
-  const [tripDays, setTripDays] = useState<TripDay[]>(initialTripDays);
+  const [location, setLocation] = useState({ name: "选择目的地", lat: 24, lng: 12 });
+  const [query, setQuery] = useState("");
+  const [places, setPlaces] = useState<Place[]>([]);
+  const [timeline, setTimeline] = useState<TripStop[]>([]);
+  const [tripDays, setTripDays] = useState<TripDay[]>([]);
   const [activeDay, setActiveDay] = useState(1);
-  const [selectedId, setSelectedId] = useState(initialTimeline[1].place.id);
+  const [selectedId, setSelectedId] = useState("");
   const [searching, setSearching] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const [hotelEditor, setHotelEditor] = useState(false);
@@ -233,7 +226,7 @@ export default function Home() {
   const [command, setCommand] = useState("");
   const [activeScenario, setActiveScenario] = useState<Scenario | null>(null);
   const [replanning, setReplanning] = useState(false);
-  const [updateNote, setUpdateNote] = useState("路线已核对：天气稳定，预约与交通衔接正常。");
+  const [updateNote, setUpdateNote] = useState("告诉我城市、酒店或旅行日期，我会从真实地点开始规划。");
   const [journeyStarted, setJourneyStarted] = useState(false);
   const [days, setDays] = useState(3);
   const [pace, setPace] = useState("松弛");
@@ -251,15 +244,19 @@ export default function Home() {
   const [aiThinking, setAiThinking] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState("");
+  const [savedTrips, setSavedTrips] = useState<SavedTrip[]>([]);
+  const [activeTripId, setActiveTripId] = useState("");
+  const [tripLibraryOpen, setTripLibraryOpen] = useState(false);
 
   const currentStop = timeline.find((stop) => stop.status === "now") ?? timeline[0];
-  const selected = places.find((place) => place.id === selectedId) ?? currentStop?.place ?? parisPlaces[1];
+  const selected = places.find((place) => place.id === selectedId) ?? currentStop?.place ?? null;
+  const hasJourney = Boolean(currentStop);
   const routeStops = useMemo(() => timeline.map((stop) => stop.place), [timeline]);
   const currentStopIndex = Math.max(0, timeline.findIndex((stop) => stop.id === currentStop?.id));
-  const currentTransit = openRoute?.legs?.[currentStopIndex]
+  const currentTransit = currentStop && openRoute?.legs?.[currentStopIndex]
     ? `步行 ${durationMinutes(openRoute.legs[currentStopIndex].duration)} 分钟 · ${((openRoute.legs[currentStopIndex].distanceMeters ?? 0) / 1000).toFixed(1)} km`
-    : currentStop.transit;
-  const navigationUrl = openDirectionsUrl(location, currentStop.place);
+    : currentStop?.transit ?? "";
+  const navigationUrl = currentStop ? openDirectionsUrl(location, currentStop.place) : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -271,9 +268,9 @@ export default function Home() {
         container: mapHostRef.current,
         style: "https://tiles.openfreemap.org/styles/liberty",
         center: [location.lng, location.lat],
-        zoom: 13.8,
-        pitch: 52,
-        bearing: -18,
+        zoom: 2.2,
+        pitch: 0,
+        bearing: 0,
         maxPitch: 68,
         attributionControl: false,
       });
@@ -322,9 +319,10 @@ export default function Home() {
     try {
       const coordinates: Array<[number, number]> = [[location.lng, location.lat], ...routeStops.map((place): [number, number] => [place.lng, place.lat])];
       const routeCoordinates = openRoute?.geometry?.coordinates?.length ? openRoute.geometry.coordinates : coordinates;
-      (map.getSource("michi-route") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: routeCoordinates } }] });
+      (map.getSource("michi-route") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: routeStops.length ? [{ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: routeCoordinates } }] : [] });
       (map.getSource("michi-stops") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: timeline.map((stop, index) => ({ type: "Feature", properties: { id: stop.place.id, name: stop.place.name, order: String(index + 1).padStart(2, "0"), status: stop.status }, geometry: { type: "Point", coordinates: [stop.place.lng, stop.place.lat] } })) });
-      (map.getSource("michi-hotel") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [location.lng, location.lat] } }] });
+      (map.getSource("michi-hotel") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: routeStops.length ? [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [location.lng, location.lat] } }] : [] });
+      if (!routeStops.length) return;
       const bounds = new maplibregl.LngLatBounds(coordinates[0], coordinates[0]);
       coordinates.forEach((point) => bounds.extend(point));
       map.fitBounds(bounds, { padding: { top: 110, right: 70, bottom: 110, left: 70 }, maxZoom: 14.8, pitch: 52, bearing: -16, duration: 950 });
@@ -334,6 +332,11 @@ export default function Home() {
   useEffect(() => {
     const controller = new AbortController();
     async function loadOpenRoute() {
+      if (!routeStops.length) {
+        setOpenRoute(null);
+        setRouteState("idle");
+        return;
+      }
       try {
         const points = [{ lat: location.lat, lng: location.lng }, ...routeStops.map((place) => ({ lat: place.lat, lng: place.lng }))];
         const response = await fetch("/api/routes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ points, travelMode: "WALK" }), signal: controller.signal });
@@ -363,13 +366,15 @@ export default function Home() {
       const response = await fetch("/api/explore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const data = await response.json() as ExploreResult & { error?: string };
       if (!response.ok || !data.location) throw new Error(data.error ?? "没有找到这个地址");
-      const nextTimeline = buildTimeline(data.places.length ? data.places : parisPlaces);
+      if (!data.places.length) throw new Error(`${data.location.name} 暂时没有足够的开放地图地点`);
+      const nextTimeline = buildTimeline(data.places);
+      if (!nextTimeline.length) throw new Error(`${data.location.name} 暂时无法生成可用行程`);
       setLocation(data.location);
-      setPlaces(data.places.length ? data.places : parisPlaces);
+      setPlaces(data.places);
       setTimeline(nextTimeline);
       setTripDays([{ day: 1, title: `${data.location.name} · 第一天`, stops: nextTimeline }]);
       setActiveDay(1);
-      setSelectedId(nextTimeline[1].place.id);
+      setSelectedId((nextTimeline[1] ?? nextTimeline[0]).place.id);
       setJourneyStarted(false);
       setActiveScenario(null);
       setHotelEditor(false);
@@ -402,8 +407,8 @@ export default function Home() {
         setTimeline((current) => current.map((stop, index) => index === 3 && freePlaces[0] ? { ...stop, place: freePlaces[0], note: "替换为免费地点，附近可步行抵达" } : stop));
         setUpdateNote("已取消高消费停留，改为免费公共空间与平价用餐，预计今天可少花约 €45。");
       } else {
-        const indoor = places.find((place) => place.category === "attraction" && /馆|museum|室内|gallery/i.test(`${place.name} ${place.localName} ${place.tags.join(" ")}`)) ?? parisPlaces[3];
-        setTimeline((current) => current.map((stop, index) => index === 2 ? { ...stop, place: indoor, note: "已替换为室内地点，避开主要降雨时段" } : stop));
+        const indoor = places.find((place) => place.category === "attraction" && /馆|museum|室内|gallery/i.test(`${place.name} ${place.localName} ${place.tags.join(" ")}`));
+        if (indoor) setTimeline((current) => current.map((stop, index) => index === 2 ? { ...stop, place: indoor, note: "已替换为室内地点，避开主要降雨时段" } : stop));
         setUpdateNote("已把户外段换成室内参观，并将短途交通集中到降雨最强的时段。");
       }
       if (customText) setUpdateNote((note) => `已理解“${customText}”。${note}`);
@@ -486,7 +491,7 @@ export default function Home() {
     }
 
     const explicitTime = requestedTime && /^([01]\d|2[0-3]):[0-5]\d$/.test(requestedTime) ? requestedTime : null;
-    const time = explicitTime ?? shiftTime(currentStop.endTime, 30);
+    const time = explicitTime ?? (currentStop ? shiftTime(currentStop.endTime, 30) : "10:00");
     const endTime = shiftTime(time, 90);
     const stop: TripStop = {
       id: `stop-place-${place.id}`,
@@ -504,6 +509,10 @@ export default function Home() {
         : item);
       return [...shifted.filter((item) => item.place.id !== place.id), stop].sort((a, b) => a.time.localeCompare(b.time));
     });
+    if (!currentStop) {
+      setLocation({ name: place.localName || place.name, lat: place.lat, lng: place.lng });
+      setTripDays([{ day: 1, title: `${place.name} · 第一天`, stops: [stop] }]);
+    }
     setSelectedId(place.id);
     setJourneyStarted(false);
     setAiState("live");
@@ -518,9 +527,8 @@ export default function Home() {
   }
 
   async function planDestinationTrip(prompt: string, destinationQuery: string, destinationLabel: string, requestedDays: number, requestedStartDate?: string | null) {
-    if (planLoading) return;
     const dayCount = Math.min(14, Math.max(1, Math.round(requestedDays || 3)));
-    const startDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedStartDate ?? "") ? requestedStartDate : null;
+    const startDate = requestedStartDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedStartDate) ? requestedStartDate : null;
     setPlanLoading(true);
     setPlanError("");
     setUpdateNote(`正在加载 ${destinationLabel} 的真实地点，并生成 ${dayCount} 天计划…`);
@@ -569,22 +577,61 @@ export default function Home() {
       setActiveScenario(null);
       setJourneyStarted(false);
       setAiState("live");
+      const tripId = `${destinationQuery.toLocaleLowerCase()}::${startDate ?? "open"}`;
+      const savedTrip: SavedTrip = {
+        id: tripId,
+        title: destinationLabel,
+        destinationQuery,
+        startDate,
+        location: explored.location,
+        places: explored.places,
+        tripDays: plannedDays,
+      };
+      setSavedTrips((current) => [...current.filter((trip) => trip.id !== tripId), savedTrip]);
+      setActiveTripId(tripId);
       const dateCopy = startDate ? `，从 ${tripDateLabel(startDate, 0)} 开始` : "";
       setUpdateNote(plan.summary ?? `已生成 ${destinationLabel} ${dayCount} 天计划${dateCopy}。`);
+      return savedTrip;
     } catch (error) {
       setAiState("error");
       const message = error instanceof Error ? error.message : "目的地计划生成失败，请稍后重试";
       setPlanError(message);
       setUpdateNote(message);
+      return null;
     } finally {
       setPlanLoading(false);
     }
   }
 
+  function openSavedTrip(trip: SavedTrip) {
+    if (activeTripId) {
+      const synchronizedDays = tripDays.map((day) => day.day === activeDay ? { ...day, stops: timeline } : day);
+      setSavedTrips((current) => current.map((item) => item.id === activeTripId ? { ...item, tripDays: synchronizedDays } : item));
+    }
+    const firstDay = trip.tripDays[0];
+    if (!firstDay?.stops.length) return;
+    setActiveTripId(trip.id);
+    setLocation(trip.location);
+    setQuery(trip.destinationQuery);
+    setPlaces(trip.places);
+    setDays(trip.tripDays.length);
+    setTripDays(trip.tripDays);
+    setActiveDay(firstDay.day);
+    setTimeline(firstDay.stops);
+    setSelectedId(firstDay.stops[0].place.id);
+    setJourneyStarted(false);
+    setActiveScenario(null);
+    setTripLibraryOpen(false);
+    setUpdateNote(`已打开 ${trip.title} 的 ${trip.tripDays.length} 天行程。`);
+  }
+
   async function runLocalCommand(text: string) {
-    const destinationIntent = parseDestinationIntent(text);
-    if (destinationIntent) {
-      await planDestinationTrip(text, destinationIntent.destinationQuery, destinationIntent.destinationLabel, destinationIntent.days, destinationIntent.startDate);
+    const destinationIntents = parseDestinationIntents(text);
+    if (destinationIntents.length) {
+      for (const destinationIntent of destinationIntents) {
+        await planDestinationTrip(text, destinationIntent.destinationQuery, destinationIntent.destinationLabel, destinationIntent.days, destinationIntent.startDate);
+      }
+      if (destinationIntents.length > 1) setTripLibraryOpen(true);
       return;
     }
     if (/吃|餐厅|晚餐|料理|法餐|法国|restaurant|dinner/i.test(text)) {
@@ -653,17 +700,25 @@ export default function Home() {
     // Multi-day destination requests are deterministic enough to route locally.
     // Handle them before the model so an occasional `place_search` classification
     // cannot turn "纽约五天" into a single-place lookup.
-    const destinationIntent = parseDestinationIntent(text);
-    if (destinationIntent) {
-      setUpdateNote(`正在查找 ${destinationIntent.destinationLabel} 的真实地点，并生成 ${destinationIntent.days} 天行程…`);
+    const destinationIntents = parseDestinationIntents(text);
+    if (destinationIntents.length) {
       try {
-        await planDestinationTrip(
-          text,
-          destinationIntent.destinationQuery,
-          destinationIntent.destinationLabel,
-          destinationIntent.days,
-          destinationIntent.startDate,
-        );
+        let completed = 0;
+        for (const [index, destinationIntent] of destinationIntents.entries()) {
+          setUpdateNote(`正在生成第 ${index + 1}/${destinationIntents.length} 段：${destinationIntent.destinationLabel} ${destinationIntent.days} 天…`);
+          const trip = await planDestinationTrip(
+            text,
+            destinationIntent.destinationQuery,
+            destinationIntent.destinationLabel,
+            destinationIntent.days,
+            destinationIntent.startDate,
+          );
+          if (trip) completed += 1;
+        }
+        if (completed > 1) {
+          setTripLibraryOpen(true);
+          setUpdateNote(`已分别保存 ${completed} 个城市行程，可以从“全部行程”随时切换。`);
+        }
       } finally {
         setAiThinking(false);
       }
@@ -784,46 +839,55 @@ export default function Home() {
     <main className="michi-shell">
       <header className="app-header">
         <button className="brand" aria-label="回到今日行程"><span>M</span><b>michi</b></button>
-        <nav aria-label="主要功能"><button className="active">今日行动</button><button onClick={() => document.querySelector(".day-line")?.scrollIntoView({ behavior: "smooth" })}>行程总览</button></nav>
+        <nav aria-label="主要功能"><button className="active">{hasJourney ? "今日行动" : "开始旅行"}</button>{hasJourney ? <button onClick={() => document.querySelector(".day-line")?.scrollIntoView({ behavior: "smooth" })}>行程总览</button> : null}</nav>
         <div className="header-actions">
-          <button className="trip-center" onClick={() => setHotelEditor(true)}><Icon name="hotel" size={16}/><span><small>旅行中心</small><b>{location.name}</b></span><Icon name="edit" size={14}/></button>
-          <button className="offline" title="行程已在本机缓存"><Icon name="offline" size={16}/><span>离线可用</span></button>
+          <button className="trip-center" onClick={() => setHotelEditor(true)}><Icon name="hotel" size={16}/><span><small>旅行中心</small><b>{hasJourney ? location.name : "选择城市或酒店"}</b></span><Icon name="edit" size={14}/></button>
+          <button className="journeys-button" onClick={() => setTripLibraryOpen(true)}><Icon name="map" size={16}/>全部行程{savedTrips.length ? <b>{savedTrips.length}</b> : null}</button>
+          {hasJourney ? <button className="offline" title="行程已在本机缓存"><Icon name="offline" size={16}/><span>离线可用</span></button> : null}
           <button className="plan-button" onClick={() => setTripPlanner(true)}><Icon name="calendar" size={16}/>行前计划</button>
           <button className="avatar" aria-label="个人账户">ZR</button>
         </div>
       </header>
 
-      <section className="command-layout">
+      <section className={hasJourney ? "command-layout" : "command-layout welcome-mode"}>
         <div className="focus-pane">
-          <div className="today-context"><span>{location.name} · 当地行程</span><i/><span>第 {activeDay} 天</span></div>
-          <div className="focus-head"><div><h1>早上好，<br/>今天交给我。</h1><p>你只需要按下一步走。天气、延误和体力变化，由我继续安排。</p></div><span className="day-mark">{String(activeDay).padStart(2, "0")}<small>DAY</small></span></div>
+          {currentStop ? <>
+            <div className="today-context"><span>{location.name} · 当地行程</span><i/><span>第 {activeDay} 天</span></div>
+            <div className="focus-head"><div><h1>早上好，<br/>今天交给我。</h1><p>你只需要按下一步走。天气、延误和体力变化，由我继续安排。</p></div><span className="day-mark">{String(activeDay).padStart(2, "0")}<small>DAY</small></span></div>
 
-          <article className="next-action">
-            <div className="action-number">NEXT <b>01</b></div>
-            <div className="action-copy">
-              <p>下一站</p>
-              <button onClick={() => { setSelectedId(currentStop.place.id); setGuideOpen(true); }}><h2>{currentStop.place.name}</h2><span>{currentStop.place.localName}</span></button>
-              <div className="action-facts"><span><Icon name="clock" size={17}/><b>{currentStop.time} 离开酒店</b></span><span><Icon name="route" size={17}/><b>{currentTransit}</b></span><span><Icon name="ticket" size={17}/><b>{currentStop.place.opening}</b></span></div>
-            </div>
-            <div className="action-cta">
-              {journeyStarted ? <a href={navigationUrl} target="_blank" rel="noreferrer">打开实时导航 <Icon name="arrow"/></a> : <button onClick={() => setJourneyStarted(true)}>开始这一程 <Icon name="arrow"/></button>}
-              <small>{journeyStarted ? "已进入途中模式，路线变化会继续提醒" : "建议 10:35 开始整理随身物品"}</small>
-            </div>
-          </article>
+            <article className="next-action">
+              <div className="action-number">NEXT <b>01</b></div>
+              <div className="action-copy">
+                <p>下一站</p>
+                <button onClick={() => { setSelectedId(currentStop.place.id); setGuideOpen(true); }}><h2>{currentStop.place.name}</h2><span>{currentStop.place.localName}</span></button>
+                <div className="action-facts"><span><Icon name="clock" size={17}/><b>{currentStop.time} 离开酒店</b></span><span><Icon name="route" size={17}/><b>{currentTransit}</b></span><span><Icon name="ticket" size={17}/><b>{currentStop.place.opening}</b></span></div>
+              </div>
+              <div className="action-cta">
+                {journeyStarted ? <a href={navigationUrl} target="_blank" rel="noreferrer">打开实时导航 <Icon name="arrow"/></a> : <button onClick={() => setJourneyStarted(true)}>开始这一程 <Icon name="arrow"/></button>}
+                <small>{journeyStarted ? "已进入途中模式，路线变化会继续提醒" : "准备好后随时开始"}</small>
+              </div>
+            </article>
 
-          <div className={replanning || aiThinking ? "live-update thinking" : "live-update"}><span><Icon name="spark" size={17}/></span><div><b>{aiThinking ? "OpenAI 正在理解并调用工具…" : replanning ? "正在重新计算今天…" : "Michi 正在照看你的今天"}</b><p>{updateNote}</p></div><i/></div>
+            <div className={replanning || aiThinking ? "live-update thinking" : "live-update"}><span><Icon name="spark" size={17}/></span><div><b>{aiThinking ? "OpenAI 正在理解并调用工具…" : replanning ? "正在重新计算今天…" : "Michi 正在照看你的今天"}</b><p>{updateNote}</p></div><i/></div>
+          </> : <div className="welcome-copy">
+            <span className="welcome-kicker"><Icon name="spark" size={16}/> AI TRAVEL COMPANION</span>
+            <h1>今天想去哪里？</h1>
+            <p>告诉我一个城市、酒店，或者一次包含多个目的地的旅行。我会用真实地点分别保存每一段行程。</p>
+            <div className="welcome-examples"><button onClick={() => setCommand("9月1日开始去东京5天")}>东京 5 天</button><button onClick={() => setCommand("纽约玩五天再去巴黎")}>纽约＋巴黎</button><button onClick={() => setHotelEditor(true)}>输入酒店</button></div>
+            <div className={aiThinking ? "welcome-status thinking" : "welcome-status"}><i/><span>{updateNote}</span></div>
+          </div>}
         </div>
 
         <section className="route-map" aria-label="今日行程地图">
           <div ref={mapHostRef} className="map-host"/>
           <div className="map-wash"/>
-          <header className="map-top"><div><span className="live-dot"/>{routeState === "live" ? "OPEN ROUTE" : routeState === "error" ? "DIRECT LINE" : "ROUTING"}</div><p>今日路线 · {timeline.length} 站</p><button aria-label="展开地图"><Icon name="map"/></button></header>
-          <div className="map-key"><span><i className="hotel-color"/>酒店</span><span><i className="now-color"/>现在</span><span><i className="next-color"/>之后</span></div>
-          {routeState === "live" ? <small className="open-route-attribution">步行路线 · FOSSGIS OSRM</small> : null}
-          <button className="next-turn" onClick={() => setJourneyStarted(true)}><span><Icon name="route" size={21}/></span><div><small>下一段</small><b>{currentTransit}</b><p>预计 {currentStop.time} 出发</p></div><Icon name="arrow"/></button>
+          <header className="map-top"><div><span className="live-dot"/>{hasJourney ? routeState === "live" ? "OPEN ROUTE" : routeState === "error" ? "DIRECT LINE" : "ROUTING" : "OPEN WORLD"}</div><p>{hasJourney ? `今日路线 · ${timeline.length} 站` : "从世界任意城市开始"}</p><button aria-label="展开地图"><Icon name="map"/></button></header>
+          {hasJourney ? <div className="map-key"><span><i className="hotel-color"/>酒店</span><span><i className="now-color"/>现在</span><span><i className="next-color"/>之后</span></div> : null}
+          {routeState === "live" && hasJourney ? <small className="open-route-attribution">步行路线 · FOSSGIS OSRM</small> : null}
+          {currentStop ? <button className="next-turn" onClick={() => setJourneyStarted(true)}><span><Icon name="route" size={21}/></span><div><small>下一段</small><b>{currentTransit}</b><p>预计 {currentStop.time} 出发</p></div><Icon name="arrow"/></button> : null}
         </section>
 
-        <section className="day-line">
+        {hasJourney ? <section className="day-line">
           <header><div><h2>第 {activeDay} 天怎么走</h2><p>{tripDays.find((day) => day.day === activeDay)?.title ?? "不是景点清单，而是一条可以随时改变的路线。"}</p></div><span>{timeline.filter((stop) => stop.status === "done").length}/{timeline.length} 完成</span></header>
           {tripDays.length > 1 ? <div className="day-tabs" aria-label="选择行程日期">{tripDays.map((day) => <button key={day.day} className={day.day === activeDay ? "active" : ""} onClick={() => selectTripDay(day.day)}>D{day.day}<span>{day.title}</span></button>)}</div> : null}
           <div className="timeline-list">
@@ -836,16 +900,18 @@ export default function Home() {
               </button>
             ))}
           </div>
-        </section>
+        </section> : null}
 
         <section className="ai-command" aria-label="AI 实时改行程">
-          <div className="scenario-actions">
+          {hasJourney ? <div className="scenario-actions">
             {(Object.keys(scenarioCopy) as Scenario[]).map((scenario) => <button key={scenario} className={activeScenario === scenario ? "active" : ""} onClick={() => replanTrip(scenarioCopy[scenario].prompt, scenario)} disabled={replanning || aiThinking}><Icon name={scenarioCopy[scenario].icon} size={16}/>{scenarioCopy[scenario].label}</button>)}
             <span className={`engine-status ${aiState}`}><i/>{aiState === "live" ? "OPENAI + OPEN MAP" : "OPEN MAP"}</span>
-          </div>
+          </div> : null}
           <form onSubmit={submitCommand}><span><Icon name="spark" size={19}/></span><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="例如：9月1日开始去纽约5天，或者我想去凯旋门" aria-label="输入行程变化"/><button type="submit" aria-label="发送给 Michi" disabled={aiThinking || planLoading}><Icon name="send" size={18}/></button></form>
         </section>
       </section>
+
+      {tripLibraryOpen ? <div className="drawer-layer"><section className="journeys-drawer" role="dialog" aria-modal="true" aria-labelledby="journeys-title"><button className="close-button" onClick={() => setTripLibraryOpen(false)} aria-label="关闭"><Icon name="close"/></button><header><span><Icon name="map" size={22}/></span><div><p>YOUR TRIPS</p><h2 id="journeys-title">全部行程</h2></div></header>{savedTrips.length ? <div className="journeys-list">{savedTrips.map((trip, index) => <button key={trip.id} className={trip.id === activeTripId ? "active" : ""} onClick={() => openSavedTrip(trip)}><span>{String(index + 1).padStart(2, "0")}</span><div><h3>{trip.title}</h3><p>{trip.startDate ? `${tripDateLabel(trip.startDate, 0)}开始 · ` : ""}{trip.tripDays.length} 天 · {trip.places.length} 个真实地点</p></div><Icon name="arrow" size={18}/></button>)}</div> : <div className="journeys-empty"><Icon name="calendar" size={28}/><h3>还没有保存的行程</h3><p>试试输入“纽约玩五天再去巴黎”，两座城市会分别保存在这里。</p></div>}</section></div> : null}
 
       {hotelEditor ? <div className="modal-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setHotelEditor(false); }}><section className="hotel-dialog" role="dialog" aria-modal="true" aria-labelledby="hotel-title"><button className="close-button" onClick={() => setHotelEditor(false)} aria-label="关闭"><Icon name="close"/></button><Icon name="hotel" size={27}/><h2 id="hotel-title">从哪里开始今天？</h2><p>输入酒店、民宿或任意地址。Michi 会重新计算整天，而不只是移动地图中心。</p><form onSubmit={submitHotel}><label htmlFor="hotel-query">酒店或地址</label><div><input id="hotel-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：The Hoxton, Rome" autoFocus/><button disabled={searching}>{searching ? "正在重排…" : "设为旅行中心"}</button></div></form><div className="quick-places">{[{label:"巴黎",q:"Saint-Germain-des-Prés, Paris"},{label:"纽约",q:"Times Square, New York"},{label:"伦敦",q:"Covent Garden, London"},{label:"曼谷",q:"Siam, Bangkok"}].map((item) => <button key={item.label} onClick={() => { setQuery(item.q); explore({query:item.q}); }}>{item.label}</button>)}</div></section></div> : null}
 
@@ -853,7 +919,7 @@ export default function Home() {
 
       {diningOpen ? <div className="drawer-layer"><section className="dining-drawer" role="dialog" aria-modal="true" aria-labelledby="dining-title"><button className="close-button" onClick={() => setDiningOpen(false)} aria-label="关闭"><Icon name="close"/></button><header><span className="dining-kicker"><Icon name="dining" size={16}/> OPENAI × OPENSTREETMAP</span><h2 id="dining-title">附近吃什么</h2><p>{diningIntent ? `${diningIntent.time} · ${diningIntent.cuisineLabel}。已从 OpenStreetMap 搜索酒店附近的真实餐厅，选一家即可加入行程。` : "告诉我想吃的菜系，我会从 OpenStreetMap 找酒店附近的真实餐厅。"}</p></header>{diningLoading ? <div className="dining-loading" role="status"><span/><span/><span/><p>正在搜索附近真实餐厅与步行距离…</p></div> : null}{diningError ? <div className="dining-error"><Icon name="map" size={23}/><h3>地点搜索暂时不可用</h3><p>{diningError}</p><small>免费开放地图无需 API 密钥，可以稍后直接重试。</small></div> : null}{!diningLoading && !diningError && diningResults.length === 0 ? <div className="dining-empty"><p>附近没有找到对应菜系。可以换一个更宽泛的说法，例如“当地餐厅”或“晚餐”。</p></div> : null}<div className="dining-results">{diningResults.map((result, index) => <article className="dining-card" key={result.id}><div className="dining-rank">{String(index + 1).padStart(2, "0")}</div><div className="dining-card-copy"><header><div><h3>{result.name}</h3><p>{result.address}</p></div></header><div className="dining-meta"><span>{result.openingLabel}</span><span>{result.distance}</span></div><footer><a href={result.detailsUri} target="_blank" rel="noreferrer">查看开放地图详情</a><button onClick={() => addDiningToTrip(result)}><Icon name="plus" size={15}/>加入今晚行程</button></footer></div></article>)}</div>{diningResults.length ? <p className="open-data-attribution">地点数据来自 OpenStreetMap 社区 · 营业时间请出发前确认</p> : null}</section></div> : null}
 
-      {guideOpen ? <div className="guide-layer"><section className="guide-drawer" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button className="close-button" onClick={() => setGuideOpen(false)} aria-label="关闭"><Icon name="close"/></button><div className="guide-visual"><span>{selected.icon}</span><div className="guide-skyline"><i/><i/><i/><i/></div></div><header><p>{selected.localName}</p><h2 id="guide-title">{selected.name}</h2><span>{selected.address}</span></header><div className="guide-modes"><button className={guideMode === "quick" ? "active" : ""} onClick={() => setGuideMode("quick")}>3 分钟速读</button><button className={guideMode === "deep" ? "active" : ""} onClick={() => setGuideMode("deep")}>10 分钟深读</button><button className={guideMode === "family" ? "active" : ""} onClick={() => setGuideMode("family")}>讲给孩子听</button></div><div className="guide-copy"><p className="guide-lead">{selected.summary}</p>{guideMode === "quick" ? <><h3>先看懂它</h3><p>{selected.name}真正值得看的，不只是最著名的正面画面，而是它如何连接周围街区、城市历史与今天的公共生活。</p><h3>到现场怎么走</h3><p>{selected.tip}</p></> : guideMode === "deep" ? <><h3>它从哪里来</h3><p>理解这里，可以从“谁建造、为谁服务、后来如何改变”三个问题开始。建筑与收藏不是孤立的对象，它们往往记录着城市权力、技术和普通生活的迁移。</p><h3>容易错过的细节</h3><p>{selected.tip} 观察入口方向、材料交接、修复痕迹和人群使用方式，往往比追逐一张标准照片更接近真实的地方。</p><h3>把它放回这座城市</h3><p>参观结束后不要立刻离开。绕到侧面街区走十分钟，看看尺度、店铺和居民生活如何变化，这一段才会把知识变成旅行记忆。</p></> : <><h3>把它想成一台时间机器</h3><p>这里就像一台很大的时间机器。不同年代的人把自己的想法、技术和生活习惯一层层留了下来，我们今天看到的是许多故事叠在一起。</p><h3>给孩子的观察任务</h3><p>找出三个不同形状的门或窗，再猜猜哪一个最老。不要急着公布答案，让孩子先说出自己的理由。</p></>}</div><div className="guide-actions"><button onClick={() => setGuideMode("deep")}><Icon name="book"/>继续深读</button><a href={openDirectionsUrl(location, selected)} target="_blank" rel="noreferrer">前往这里 <Icon name="arrow"/></a></div></section></div> : null}
+      {guideOpen && selected ? <div className="guide-layer"><section className="guide-drawer" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button className="close-button" onClick={() => setGuideOpen(false)} aria-label="关闭"><Icon name="close"/></button><div className="guide-visual"><span>{selected.icon}</span><div className="guide-skyline"><i/><i/><i/><i/></div></div><header><p>{selected.localName}</p><h2 id="guide-title">{selected.name}</h2><span>{selected.address}</span></header><div className="guide-modes"><button className={guideMode === "quick" ? "active" : ""} onClick={() => setGuideMode("quick")}>3 分钟速读</button><button className={guideMode === "deep" ? "active" : ""} onClick={() => setGuideMode("deep")}>10 分钟深读</button><button className={guideMode === "family" ? "active" : ""} onClick={() => setGuideMode("family")}>讲给孩子听</button></div><div className="guide-copy"><p className="guide-lead">{selected.summary}</p>{guideMode === "quick" ? <><h3>先看懂它</h3><p>{selected.name}真正值得看的，不只是最著名的正面画面，而是它如何连接周围街区、城市历史与今天的公共生活。</p><h3>到现场怎么走</h3><p>{selected.tip}</p></> : guideMode === "deep" ? <><h3>它从哪里来</h3><p>理解这里，可以从“谁建造、为谁服务、后来如何改变”三个问题开始。建筑与收藏不是孤立的对象，它们往往记录着城市权力、技术和普通生活的迁移。</p><h3>容易错过的细节</h3><p>{selected.tip} 观察入口方向、材料交接、修复痕迹和人群使用方式，往往比追逐一张标准照片更接近真实的地方。</p><h3>把它放回这座城市</h3><p>参观结束后不要立刻离开。绕到侧面街区走十分钟，看看尺度、店铺和居民生活如何变化，这一段才会把知识变成旅行记忆。</p></> : <><h3>把它想成一台时间机器</h3><p>这里就像一台很大的时间机器。不同年代的人把自己的想法、技术和生活习惯一层层留了下来，我们今天看到的是许多故事叠在一起。</p><h3>给孩子的观察任务</h3><p>找出三个不同形状的门或窗，再猜猜哪一个最老。不要急着公布答案，让孩子先说出自己的理由。</p></>}</div><div className="guide-actions"><button onClick={() => setGuideMode("deep")}><Icon name="book"/>继续深读</button><a href={openDirectionsUrl(location, selected)} target="_blank" rel="noreferrer">前往这里 <Icon name="arrow"/></a></div></section></div> : null}
     </main>
   );
 }

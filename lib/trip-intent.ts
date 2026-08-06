@@ -88,3 +88,25 @@ export function parseDestinationIntent(text: string, now = new Date()): Destinat
     startDate: parseStartDate(normalized, now),
   };
 }
+
+export function parseDestinationIntents(text: string, now = new Date()) {
+  const segments = text
+    .split(/(?:，|,|；|;)?\s*(?:(?:再|然后|接着|之后)\s*(?=(?:去|到|前往))|then\s+(?=(?:go to|visit|travel to)))/iu)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (segments.length < 2) {
+    const single = parseDestinationIntent(text, now);
+    return single ? [single] : [];
+  }
+
+  const intents = segments.flatMap((segment, index) => {
+    const direct = parseDestinationIntent(segment, now);
+    if (direct) return [direct];
+    if (index === 0) return [];
+    const implicit = parseDestinationIntent(`${segment}旅行`, now);
+    return implicit ? [implicit] : [];
+  });
+
+  return intents.length === segments.length ? intents : [];
+}

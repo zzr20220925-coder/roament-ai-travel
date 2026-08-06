@@ -25,10 +25,14 @@ test("server-renders the completed travel agent", async () => {
   assert.match(html, /class="michi-shell"/);
   assert.match(html, /aria-label="今日行程地图"/);
   assert.match(html, /旅行中心/);
+  assert.match(html, /今天想去哪里？/);
+  assert.match(html, /全部行程/);
+  assert.match(html, /纽约＋巴黎/);
   assert.match(html, /我想去凯旋门/);
   assert.match(html, /9月1日开始去纽约5天/);
+  assert.doesNotMatch(html, /卢浮宫|圣日耳曼|塞纳河日落|巴黎经典与左岸/);
   assert.doesNotMatch(html, /今晚法国菜 · 4\.5\+ · €20/);
-  assert.match(html, /OPEN MAP/);
+  assert.match(html, /OPEN WORLD/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseDestinationIntent } from "../lib/trip-intent.ts";
+import { parseDestinationIntent, parseDestinationIntents } from "../lib/trip-intent.ts";
 
 const now = new Date(2026, 7, 5, 12, 0, 0);
 
@@ -35,4 +35,15 @@ test("does not turn an ordinary landmark request into a multi-day trip", () => {
 test("caps very long requests and defaults unspecific trips to three days", () => {
   assert.equal(parseDestinationIntent("去冰岛旅行", now)?.days, 3);
   assert.equal(parseDestinationIntent("去罗马30天", now)?.days, 14);
+});
+
+test("splits a multi-city request into independently viewable trips", () => {
+  const trips = parseDestinationIntents("纽约玩五天再去巴黎", now);
+  assert.deepEqual(trips.map((trip) => [trip.destinationQuery, trip.days]), [["纽约", 5], ["巴黎", 3]]);
+
+  const datedTrips = parseDestinationIntents("9月1日去东京4天，然后去首尔2天", now);
+  assert.deepEqual(datedTrips.map((trip) => [trip.destinationQuery, trip.days, trip.startDate]), [
+    ["东京", 4, "2026-09-01"],
+    ["首尔", 2, null],
+  ]);
 });
